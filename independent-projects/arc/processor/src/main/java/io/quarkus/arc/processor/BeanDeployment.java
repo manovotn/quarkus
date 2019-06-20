@@ -83,7 +83,8 @@ public class BeanDeployment {
     BeanDeployment(IndexView index, Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations,
             List<AnnotationsTransformer> annotationTransformers) {
         this(index, additionalBeanDefiningAnnotations, annotationTransformers, Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyList(), Collections.emptyList(), null, false, null, Collections.emptyMap());
+                Collections.emptyList(), Collections.emptyList(), null, false, null, Collections.emptyMap(),
+                Collections.EMPTY_LIST);
     }
 
     BeanDeployment(IndexView index, Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations,
@@ -92,7 +93,8 @@ public class BeanDeployment {
             Collection<DotName> resourceAnnotations, List<BeanRegistrar> beanRegistrars,
             List<ContextRegistrar> contextRegistrars,
             BuildContextImpl buildContext, boolean removeUnusedBeans, List<Predicate<BeanInfo>> unusedExclusions,
-            Map<DotName, Collection<AnnotationInstance>> additionalStereotypes) {
+            Map<DotName, Collection<AnnotationInstance>> additionalStereotypes,
+            List<DotName> additionalInterceptorBindings) {
         long start = System.currentTimeMillis();
         Collection<BeanDefiningAnnotation> beanDefiningAnnotations = new HashSet<>();
         if (additionalBeanDefiningAnnotations != null) {
@@ -122,6 +124,16 @@ public class BeanDeployment {
 
         this.qualifiers = findQualifiers(index);
         this.interceptorBindings = findInterceptorBindings(index);
+        if (additionalInterceptorBindings != null) {
+            for (DotName bindingName : additionalInterceptorBindings) {
+                ClassInfo bindingClass = index.getClassByName(bindingName);
+                if (bindingClass != null) {
+                    interceptorBindings.put(bindingName, bindingClass);
+                } else {
+                    // TODO blow up? Shouldn't we test this earlier when user adds it?
+                }
+            }
+        }
         this.transitiveInterceptorBindings = findTransitiveInterceptorBindigs(interceptorBindings.keySet(), index,
                 new HashMap<>());
         this.stereotypes = findStereotypes(index, interceptorBindings, beanDefiningAnnotations, customContexts,

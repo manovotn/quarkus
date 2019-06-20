@@ -44,6 +44,7 @@ public class BeanProcessor {
 
     private final Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations;
     private final Map<DotName, Collection<AnnotationInstance>> additionalStereotypes;
+    private final List<DotName> additionalInterceptorBindings;
 
     private final ResourceOutput output;
 
@@ -75,12 +76,14 @@ public class BeanProcessor {
             List<ContextRegistrar> contextRegistrars, List<DeploymentEnhancer> deploymentEnhancers,
             List<BeanDeploymentValidator> beanDeploymentValidators, Predicate<DotName> applicationClassPredicate,
             boolean unusedBeansRemovalEnabled,
-            List<Predicate<BeanInfo>> unusedExclusions, Map<DotName, Collection<AnnotationInstance>> additionalStereotypes) {
+            List<Predicate<BeanInfo>> unusedExclusions, Map<DotName, Collection<AnnotationInstance>> additionalStereotypes,
+            List<DotName> additionalInterceptorBindings) {
         this.reflectionRegistration = reflectionRegistration;
         this.applicationClassPredicate = applicationClassPredicate;
         this.name = name;
         this.additionalBeanDefiningAnnotations = additionalBeanDefiningAnnotations;
         this.additionalStereotypes = additionalStereotypes;
+        this.additionalInterceptorBindings = additionalInterceptorBindings;
         this.output = Objects.requireNonNull(output);
         this.sharedAnnotationLiterals = sharedAnnotationLiterals;
         this.resourceAnnotations = resourceAnnotations;
@@ -136,7 +139,7 @@ public class BeanProcessor {
 
         BeanDeployment beanDeployment = new BeanDeployment(index, additionalBeanDefiningAnnotations, annotationTransformers,
                 injectionPointsTransformers, resourceAnnotations, beanRegistrars, contextRegistrars, buildContext,
-                removeUnusedBeans, unusedExclusions, additionalStereotypes);
+                removeUnusedBeans, unusedExclusions, additionalStereotypes, additionalInterceptorBindings);
         beanDeployment.init();
         beanDeployment.validate(buildContext, beanDeploymentValidators);
 
@@ -224,6 +227,7 @@ public class BeanProcessor {
 
         private Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations = Collections.emptySet();
         private Map<DotName, Collection<AnnotationInstance>> additionalStereotypes = Collections.emptyMap();
+        private List<DotName> additionalInterceptorBindings = Collections.EMPTY_LIST;
 
         private ResourceOutput output;
 
@@ -270,6 +274,11 @@ public class BeanProcessor {
         public Builder setAdditionalStereotypes(Map<DotName, Collection<AnnotationInstance>> additionalStereotypes) {
             Objects.requireNonNull(additionalStereotypes);
             this.additionalStereotypes = additionalStereotypes;
+            return this;
+        }
+
+        public Builder setAdditionalInterceptorBindings(List<DotName> additionalInterceptorBindings) {
+            this.additionalInterceptorBindings = additionalInterceptorBindings;
             return this;
         }
 
@@ -365,7 +374,8 @@ public class BeanProcessor {
             return new BeanProcessor(name, index, additionalBeanDefiningAnnotations, output, sharedAnnotationLiterals,
                     reflectionRegistration, annotationTransformers, injectionPointTransformers, resourceAnnotations,
                     beanRegistrars, contextRegistrars, deploymentEnhancers, beanDeploymentValidators,
-                    applicationClassPredicate, removeUnusedBeans, removalExclusions, additionalStereotypes);
+                    applicationClassPredicate, removeUnusedBeans, removalExclusions, additionalStereotypes,
+                    additionalInterceptorBindings);
         }
 
     }

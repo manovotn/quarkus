@@ -101,6 +101,9 @@ public class ArcAnnotationProcessor {
     @Inject
     Optional<TestClassPredicateBuildItem> testClassPredicate;
 
+    @Inject
+    List<InterceptorBindingBuildItem> additionalInterceptorBindings;
+
     /**
      * The configuration for ArC, the CDI-based injection facility.
      */
@@ -177,6 +180,8 @@ public class ArcAnnotationProcessor {
             additionalStereotypes.putAll(item.getStereotypes());
         }
         builder.setAdditionalStereotypes(additionalStereotypes);
+        builder.setAdditionalInterceptorBindings(
+                additionalInterceptorBindings.stream().map(i -> i.getName()).collect(Collectors.toList()));
         builder.setSharedAnnotationLiterals(true);
         builder.addResourceAnnotations(
                 resourceAnnotations.stream().map(ResourceAnnotationBuildItem::getName).collect(Collectors.toList()));
