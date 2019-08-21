@@ -6,6 +6,7 @@ import static io.quarkus.smallrye.metrics.deployment.SmallRyeMetricsDotNames.GAU
 import static io.quarkus.smallrye.metrics.deployment.SmallRyeMetricsDotNames.METRICS_ANNOTATIONS;
 import static io.quarkus.smallrye.metrics.deployment.SmallRyeMetricsDotNames.METRICS_BINDING;
 
+import java.lang.reflect.Modifier;
 import java.util.*;
 
 import javax.enterprise.context.Dependent;
@@ -216,7 +217,9 @@ public class SmallRyeMetricsProcessor {
         for (ClassInfo clazz : collectedMetricsClasses.values()) {
             BeanInfo beanInfo = beanInfoAdapter.convert(clazz);
             for (MethodInfo method : clazz.methods()) {
-                metrics.registerMetrics(beanInfo, memberInfoAdapter.convert(method));
+                if (!Modifier.isPrivate(method.flags())) {
+                    metrics.registerMetrics(beanInfo, memberInfoAdapter.convert(method));
+                }
             }
         }
 
