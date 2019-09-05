@@ -57,6 +57,7 @@
         <microprofile-metrics-api.version>2.0.2</microprofile-metrics-api.version>
         <microprofile-rest-client-api.version>1.2.1</microprofile-rest-client-api.version>
         <microprofile-open-api.version>1.1.2</microprofile-open-api.version>
+        <microprofile-context-propagation.version>1.0</microprofile-context-propagation.version>
     </properties>
 
     <dependencyManagement>
