@@ -35,6 +35,7 @@ import io.quarkus.deployment.builditem.substrate.SubstrateSystemPropertyBuildIte
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.smallrye.faulttolerance.runtime.QuarkusFallbackHandlerProvider;
 import io.quarkus.smallrye.faulttolerance.runtime.QuarkusFaultToleranceOperationProvider;
+import io.quarkus.smallrye.faulttolerance.runtime.RequestContextListener;
 import io.quarkus.smallrye.faulttolerance.runtime.SmallryeFaultToleranceRecorder;
 import io.smallrye.faulttolerance.DefaultCommandListenersProvider;
 import io.smallrye.faulttolerance.DefaultHystrixConcurrencyStrategy;
@@ -131,7 +132,8 @@ public class SmallRyeFaultToleranceProcessor {
                 DefaultHystrixConcurrencyStrategy.class,
                 QuarkusFaultToleranceOperationProvider.class, QuarkusFallbackHandlerProvider.class,
                 DefaultCommandListenersProvider.class,
-                MetricsCollectorFactory.class);
+                MetricsCollectorFactory.class,
+                RequestContextListener.class);
         additionalBean.produce(builder.build());
     }
 
