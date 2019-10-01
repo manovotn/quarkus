@@ -2,10 +2,6 @@ package io.quarkus.arc.test.producer.generic;
 
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.test.ArcTestContainer;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
-
 import java.util.Date;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -15,6 +11,9 @@ import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.inject.Produces;
 import javax.enterprise.util.TypeLiteral;
 import javax.inject.Singleton;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 public class WildcardProducerHierarchyTest {
 
@@ -23,7 +22,8 @@ public class WildcardProducerHierarchyTest {
 
     @Test
     public void testWildcardProducers() {
-        Function<String, Date> fn = Arc.container().instance(new TypeLiteral<Function<String, Date>>() {}).get();
+        Function<String, Date> fn = Arc.container().instance(new TypeLiteral<Function<String, Date>>() {
+        }).get();
         Assertions.assertNotNull(fn.apply(String.valueOf(System.currentTimeMillis())));
     }
 
@@ -38,13 +38,15 @@ public class WildcardProducerHierarchyTest {
 
         @Produces
         @Singleton
-        public LocalService<? extends AsyncBiFunctionService.WithInner<String, Long, Date>> localInner(AsyncBiFunctionService.WithInner<String, Long, Date> service) {
-            return new LocalService<>(service);
+        public <T extends AsyncBiFunctionService.WithInner<String, Long, Date>> LocalService<T> localInner(
+                AsyncBiFunctionService.WithInner<String, Long, Date> service) {
+            return (LocalService<T>) new LocalService<>(service);
         }
 
         @Produces
         @ApplicationScoped
-        public Function<String, Date> deps(LocalService<? extends AsyncBiFunctionService.WithInner<String, Long, Date>> service) {
+        public <T extends AsyncBiFunctionService.WithInner<String, Long, Date>> Function<String, Date> deps(
+                LocalService<T> service) {
             return s -> {
                 try {
                     return service.service.apply(s, 0L).toCompletableFuture().get();
@@ -66,7 +68,9 @@ public class WildcardProducerHierarchyTest {
     interface AsyncBiFunctionService<K, REQ, RES> extends BiFunction<K, REQ, CompletionStage<RES>>, AutoCloseable {
         interface WithInner<K, REQ, RES> extends AsyncBiFunctionService<K, REQ, RES> {
             Function<K, REQ> key();
+
             Function<REQ, RES> req();
+
             Function<RES, String> res();
         }
     }
