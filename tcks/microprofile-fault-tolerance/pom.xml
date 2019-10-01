@@ -28,6 +28,10 @@
                     <dependenciesToScan>
                         <dependency>org.eclipse.microprofile.fault-tolerance:microprofile-fault-tolerance-tck</dependency>
                     </dependenciesToScan>
+                    <excludes>
+                        <!-- Waiting on https://github.com/eclipse/microprofile-fault-tolerance/pull/450 -->
+                        <exclude>org.eclipse.microprofile.fault.tolerance.tck.bulkhead.BulkheadAsynchTest</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
         </plugins>
