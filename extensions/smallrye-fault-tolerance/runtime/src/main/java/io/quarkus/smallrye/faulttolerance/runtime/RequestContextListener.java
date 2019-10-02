@@ -31,6 +31,10 @@ public class RequestContextListener implements CommandListener {
 
     @Override
     public void afterExecution(FaultToleranceOperation operation) {
+        if (didActivate.get() == null) {
+            // TODO how can this even happen?
+            return;
+        }
         if (didActivate.get()) {
             ArcContainer arc = Arc.container();
             if (arc != null && arc.isRunning()) {
@@ -38,7 +42,6 @@ public class RequestContextListener implements CommandListener {
                 requestContext.terminate();
                 requestContext.deactivate();
             }
-            // always set this back to false
             this.didActivate.set(Boolean.FALSE);
         }
     }
