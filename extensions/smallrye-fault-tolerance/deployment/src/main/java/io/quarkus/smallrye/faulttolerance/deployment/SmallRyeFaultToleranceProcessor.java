@@ -61,7 +61,8 @@ public class SmallRyeFaultToleranceProcessor {
 
     @BuildStep
     public void build(BuildProducer<AnnotationsTransformerBuildItem> annotationsTransformer,
-            BuildProducer<FeatureBuildItem> feature, BuildProducer<AdditionalBeanBuildItem> additionalBean) throws Exception {
+            BuildProducer<FeatureBuildItem> feature, BuildProducer<AdditionalBeanBuildItem> additionalBean,
+            BuildProducer<BeanDefiningAnnotationBuildItem> additionalBda) throws Exception {
 
         feature.produce(new FeatureBuildItem(FeatureBuildItem.SMALLRYE_FAULT_TOLERANCE));
 
@@ -97,6 +98,8 @@ public class SmallRyeFaultToleranceProcessor {
         reflectiveClass.produce(new ReflectiveClassBuildItem(false, true, HystrixCircuitBreaker.Factory.class.getName()));
         for (DotName annotation : ftAnnotations) {
             reflectiveClass.produce(new ReflectiveClassBuildItem(true, false, annotation.toString()));
+            // also make them bean defining annotations
+            additionalBda.produce(new BeanDefiningAnnotationBuildItem(annotation));
         }
 
         // Add transitive interceptor binding to FT annotations
