@@ -15,9 +15,14 @@ public class InterceptedBeanMetadataProvider implements InjectableReferenceProvi
     @Override
     public Contextual<?> get(CreationalContext<Contextual<?>> creationalContext) {
         CreationalContextImpl<?> parent = unwrap(creationalContext).getParent();
-        if (parent != null) {
-            // Intercepted bean creational context
-            return parent.getContextual();
+        // TODO in some cases, first level CC does the trick but for FT interceptor we need second, why?
+        while (parent != null) {
+            CreationalContextImpl<?> newParent = unwrap(parent).getParent();
+            if (newParent != null) {
+                parent = newParent;
+            } else {
+                return parent.getContextual();
+            }
         }
         return null;
     }
