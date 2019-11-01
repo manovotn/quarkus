@@ -25,7 +25,7 @@ public class QuarkusBeforeAfterLifecycle {
         }
     }
 
-    public void on(@Observes(precedence = 100) org.jboss.arquillian.test.spi.event.suite.After event) throws Throwable {
+    public void on(@Observes(precedence = -100) org.jboss.arquillian.test.spi.event.suite.After event) throws Throwable {
         if (isJunitAvailable()) {
             invokeCallbacks(JUNIT_INVOKE_AFTERS, JUNIT_CALLBACKS);
         }
@@ -41,7 +41,7 @@ public class QuarkusBeforeAfterLifecycle {
         }
     }
 
-    public void afterClass(@Observes(precedence = 100) org.jboss.arquillian.test.spi.event.suite.AfterClass event)
+    public void afterClass(@Observes(precedence = -100) org.jboss.arquillian.test.spi.event.suite.AfterClass event)
             throws Throwable {
         if (isTestNGAvailable()) {
             invokeCallbacks(TESTNG_INVOKE_AFTER_CLASS, TESTNG_CALLBACKS);
