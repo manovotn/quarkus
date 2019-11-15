@@ -29,7 +29,7 @@ public class RemoveUnusedBeansTest {
     public ArcTestContainer container = ArcTestContainer.builder()
             .beanClasses(HasObserver.class, Foo.class, FooAlternative.class, HasName.class, UnusedProducers.class,
                     InjectedViaInstance.class, InjectedViaInstanceWithWildcard.class, InjectedViaInstanceWithWildcard2.class,
-                    InjectedViaProvider.class, Excluded.class,
+                    InjectedViaProvider.class, Excluded.class, InjectedViaInstanceWithT.class,
                     UsedProducers.class,
                     UnusedProducerButInjected.class, UsedViaInstanceWithUnusedProducer.class, UsesBeanViaInstance.class)
             .removeUnusedBeans(true)
@@ -44,6 +44,7 @@ public class RemoveUnusedBeansTest {
         assertTrue(container.instance(InjectedViaInstance.class).isAvailable());
         assertTrue(container.instance(InjectedViaInstanceWithWildcard.class).isAvailable());
         assertTrue(container.instance(InjectedViaInstanceWithWildcard2.class).isAvailable());
+        assertTrue(container.instance(InjectedViaInstanceWithT.class).isAvailable());
         assertTrue(container.instance(InjectedViaProvider.class).isAvailable());
         assertTrue(container.instance(String.class).isAvailable());
         assertTrue(container.instance(UsedProducers.class).isAvailable());
@@ -95,7 +96,7 @@ public class RemoveUnusedBeansTest {
     @Alternative
     @Priority(1)
     @Dependent
-    static class FooAlternative extends Foo {
+    static class FooAlternative<T extends InjectedViaInstanceWithT> extends Foo {
 
         @Inject
         Instance<InjectedViaInstance> instance;
@@ -109,6 +110,9 @@ public class RemoveUnusedBeansTest {
         @Inject
         String foo;
 
+        @Inject
+        Instance<T> injectedViaInstanceWithT;
+
     }
 
     @Singleton
@@ -118,6 +122,11 @@ public class RemoveUnusedBeansTest {
 
     @Singleton
     static class InjectedViaInstanceWithWildcard {
+
+    }
+
+    @Singleton
+    static class InjectedViaInstanceWithT {
 
     }
 
