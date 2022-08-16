@@ -23,7 +23,6 @@ import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.arc.deployment.devconsole.DependencyGraph.Link;
 import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.BeanDeploymentValidator;
-import io.quarkus.arc.processor.BeanDeploymentValidator.ValidationContext;
 import io.quarkus.arc.processor.BeanInfo;
 import io.quarkus.arc.processor.BeanResolver;
 import io.quarkus.arc.processor.BuildExtension;
@@ -138,21 +137,37 @@ public class ArcDevConsoleProcessor {
         BeanResolver resolver = validationPhaseBuildItem.getBeanResolver();
         Collection<BeanInfo> beans = validationContext.get(BuildExtension.Key.BEANS);
         Map<BeanInfo, List<InjectionPointInfo>> directDependents = new HashMap<>();
-        List<InjectionPointInfo> allInjectionPoints = new ArrayList<>();
         Map<BeanInfo, List<BeanInfo>> declaringToProducers = validationContext.beans().producers()
                 .collect(Collectors.groupingBy(BeanInfo::getDeclaringBean));
         for (BeanInfo b : beans) {
             if (b.hasInjectionPoint()) {
                 for (InjectionPointInfo ip : b.getAllInjectionPoints()) {
+                    List<InjectionPointInfo> direct = new ArrayList<>();
                     if (ip.getTargetBean().isPresent()) {
-                        allInjectionPoints.add(ip);
+                        BeanInfo dependent = ip.getTargetBean().get();
+                        if (!dependent.equals(b)) {
+                            BeanInfo resolved = ip.getResolvedBean();
+                            if (resolved == null) {
+                                if (ip.isProgrammaticLookup() && resolver.matches(b,
+                                        ip.getType().asParameterizedType().arguments().get(0),
+                                        ip.getRequiredQualifiers())) {
+                                    direct.add(ip);
+                                }
+                            } else if (b.equals(resolved)) {
+                                direct.add(ip);
+                            }
+                        }
                     }
+                    directDependents.put(b, direct);
                 }
+            } else {
+                // empty list, no direct dependencies
+                directDependents.put(b, new ArrayList<>());
             }
         }
         for (BeanInfo bean : beans) {
             beanInfos.addDependencyGraph(bean.getIdentifier(),
-                    buildDependencyGraph(bean, validationContext, resolver, beanInfos, allInjectionPoints, declaringToProducers,
+                    buildDependencyGraph(bean, beanInfos, declaringToProducers,
                             directDependents));
         }
 
@@ -170,14 +185,14 @@ public class ArcDevConsoleProcessor {
         return false;
     }
 
-    DependencyGraph buildDependencyGraph(BeanInfo bean, ValidationContext validationContext, BeanResolver resolver,
-            DevBeanInfos devBeanInfos, List<InjectionPointInfo> allInjectionPoints,
+    DependencyGraph buildDependencyGraph(BeanInfo bean,
+            DevBeanInfos devBeanInfos,
             Map<BeanInfo, List<BeanInfo>> declaringToProducers,
             Map<BeanInfo, List<InjectionPointInfo>> directDependents) {
         Set<DevBeanInfo> nodes = new HashSet<>();
         Set<Link> links = new HashSet<>();
         addNodesDependencies(bean, nodes, links, bean, devBeanInfos);
-        addNodesDependents(bean, nodes, links, bean, allInjectionPoints, declaringToProducers, resolver, devBeanInfos,
+        addNodesDependents(bean, nodes, links, bean, declaringToProducers, devBeanInfos,
                 directDependents);
         return new DependencyGraph(nodes, links);
     }
@@ -201,29 +216,10 @@ public class ArcDevConsoleProcessor {
     }
 
     void addNodesDependents(BeanInfo root, Set<DevBeanInfo> nodes, Set<Link> links, BeanInfo bean,
-            List<InjectionPointInfo> injectionPoints, Map<BeanInfo, List<BeanInfo>> declaringToProducers, BeanResolver resolver,
+            Map<BeanInfo, List<BeanInfo>> declaringToProducers,
             DevBeanInfos devBeanInfos, Map<BeanInfo, List<InjectionPointInfo>> directDependents) {
+        // all direct dependencies were gathered in the previous step, the list always exists
         List<InjectionPointInfo> direct = directDependents.get(bean);
-        if (direct == null) {
-            direct = new ArrayList<>();
-            for (InjectionPointInfo injectionPoint : injectionPoints) {
-                BeanInfo dependent = injectionPoint.getTargetBean().get();
-                if (dependent.equals(bean)) {
-                    continue;
-                }
-                BeanInfo resolved = injectionPoint.getResolvedBean();
-                if (resolved == null) {
-                    if (injectionPoint.isProgrammaticLookup() && resolver.matches(bean,
-                            injectionPoint.getType().asParameterizedType().arguments().get(0),
-                            injectionPoint.getRequiredQualifiers())) {
-                        direct.add(injectionPoint);
-                    }
-                } else if (bean.equals(resolved)) {
-                    direct.add(injectionPoint);
-                }
-            }
-            directDependents.put(bean, direct);
-        }
         for (InjectionPointInfo ip : direct) {
             BeanInfo dependent = ip.getTargetBean().get();
             Link link;
@@ -235,7 +231,7 @@ public class ArcDevConsoleProcessor {
             links.add(link);
             if (nodes.add(devBeanInfos.getBean(dependent.getIdentifier()))) {
                 // add transient dependents
-                addNodesDependents(root, nodes, links, dependent, injectionPoints, declaringToProducers, resolver,
+                addNodesDependents(root, nodes, links, dependent, declaringToProducers,
                         devBeanInfos, directDependents);
             }
         }
@@ -244,7 +240,7 @@ public class ArcDevConsoleProcessor {
             links.add(Link.producer(producer.getIdentifier(), bean.getIdentifier()));
             if (nodes.add(devBeanInfos.getBean(producer.getIdentifier()))) {
                 // add transient dependents
-                addNodesDependents(root, nodes, links, producer, injectionPoints, declaringToProducers, resolver,
+                addNodesDependents(root, nodes, links, producer, declaringToProducers,
                         devBeanInfos, directDependents);
             }
         }
