@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import io.quarkus.arc.processor.Annotations;
+import io.quarkus.runtime.Startup;
 import jakarta.enterprise.inject.spi.DefinitionException;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -79,6 +81,7 @@ public class SpringDIProcessor {
     private static final DotName CDI_NAMED_ANNOTATION = DotNames.NAMED;
     private static final DotName CDI_INJECT_ANNOTATION = DotNames.INJECT;
     private static final DotName CDI_PRODUCES_ANNOTATION = DotNames.PRODUCES;
+    private static final DotName CDI_STARTUP = DotName.createSimple(Startup.class.getName());
     private static final DotName QUARKUS_ALL_ANNOTATION = DotNames.ALL;
     private static final DotName MP_CONFIG_PROPERTY_ANNOTATION = DotName.createSimple(ConfigProperty.class.getName());
 
@@ -350,10 +353,12 @@ public class SpringDIProcessor {
 
                 if (shouldAdd) {
                     final DotName scope = validateScope(classInfo, scopes, scopeStereotypes);
-                    annotationsToAdd.add(create(
-                            scope,
-                            target,
-                            Collections.emptyList()));
+                    if (scope!= null) {
+                        annotationsToAdd.add(create(
+                                scope,
+                                target,
+                                Collections.emptyList()));
+                    }
                 }
             }
             final String name = validateName(classInfo, names);
@@ -622,8 +627,13 @@ public class SpringDIProcessor {
         final int size = scopes.size();
         switch (size) {
             case 0:
-                // Spring default
-                return CDI_SINGLETON_ANNOTATION;
+                if (Annotations.contains(clazz.declaredAnnotations(), CDI_STARTUP)) {
+                    // do nothing, having @Startup will automatically add @ApplicationScoped
+                    return null;
+                } else {
+                    // Spring default
+                    return CDI_SINGLETON_ANNOTATION;
+                }
             case 1:
                 return scopes.iterator().next();
             default:
