@@ -5,11 +5,13 @@ import static io.quarkus.opentelemetry.runtime.config.build.OTelBuildConfig.INST
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.util.Collections;
 import java.util.Set;
 
 import jakarta.annotation.Priority;
 import jakarta.interceptor.AroundInvoke;
 import jakarta.interceptor.Interceptor;
+import jakarta.interceptor.InvocationContext;
 
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.SpanKind;
@@ -47,11 +49,13 @@ public class WithSpanInterceptor {
     }
 
     @AroundInvoke
-    public Object span(final ArcInvocationContext invocationContext) throws Exception {
+    public Object span(final InvocationContext invocationContext) throws Exception {
+        Set<Annotation> interceptorBindings = (Set<Annotation>) invocationContext.getContextData()
+                .get(ArcInvocationContext.KEY_INTERCEPTOR_BINDINGS);
         MethodRequest methodRequest = new MethodRequest(
                 invocationContext.getMethod(),
                 invocationContext.getParameters(),
-                invocationContext.getInterceptorBindings());
+                interceptorBindings == null ? Collections.emptySet() : interceptorBindings);
 
         Context parentContext = Context.current();
         Context spanContext = null;
@@ -107,7 +111,7 @@ public class WithSpanInterceptor {
                     break;
                 }
             }
-            if (spanName.isEmpty()) {
+            if (spanName == null || spanName.isEmpty()) {
                 spanName = SpanNames.fromMethod(methodRequest.getMethod());
             }
             return spanName;
