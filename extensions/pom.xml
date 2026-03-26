@@ -65,6 +65,9 @@
         <module>smallrye-openapi</module>
         <module>swagger-ui</module>
 
+        <!-- Quarkus Events -->
+        <module>events</module>
+
         <!-- Reactive -->
         <module>mutiny</module>
         <module>vertx</module>
