@@ -1,15 +1,16 @@
 package io.quarkus.events.runtime;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import jakarta.enterprise.inject.spi.BeanContainer;
 
 import io.quarkus.events.EventConsumerRegistration;
 import io.smallrye.mutiny.Uni;
@@ -17,68 +18,53 @@ import io.vertx.mutiny.core.eventbus.EventBus;
 import io.vertx.mutiny.core.eventbus.Message;
 
 /**
- * Central event dispatcher that performs CDI-style type resolution at send time.
+ * Central event dispatcher that uses CDI's {@code isMatchingEvent} for type-safe resolution.
  * <p>
- * Instead of pre-registering consumers on multiple Vert.x addresses (fan-out),
- * each consumer registers once with its observed type. When an event is sent,
- * the dispatcher computes the type closure of the event's runtime type and
- * finds all consumers whose observed type is in that closure.
- * <p>
- * This approach supports both build-time ({@code @OnEvent}) and runtime
- * (programmatic) consumers with full subtype matching.
+ * Each consumer registers with its observed {@link Type} and qualifier {@link Annotation}s.
+ * When an event is sent, the dispatcher iterates all consumers and uses
+ * {@link BeanContainer#isMatchingEvent} to find matches. Results are cached and
+ * invalidated when consumers are added or removed.
  */
 public class EventDispatcher {
 
     private final EventBus eventBus;
+    private final BeanContainer beanContainer;
 
     /**
-     * Registry of consumers keyed by their observed type.
-     * A consumer of {@code Animal} is stored under {@code Animal.class}.
-     * When a {@code Dog} event is sent, we walk up Dog's type hierarchy,
-     * find {@code Animal} in the closure, and include this consumer.
+     * All registered consumers, keyed by unique consumer ID.
      */
-    private final Map<ConsumerKey, List<ConsumerEntry>> consumers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ConsumerRecord> consumers = new ConcurrentHashMap<>();
 
     /**
-     * Round-robin counter for point-to-point (send) and request-response delivery.
-     * Keyed by the event's runtime type + qualifiers to ensure fair distribution.
-     * <p>
-     * Note: this is a simplified implementation. The matching consumer list is recomputed
-     * on every send, so if consumers are added/removed between sends, the modulo shifts
-     * and may skip or repeat consumers. Vert.x solves this with ConcurrentCyclicSequence —
-     * an immutable array where add/remove creates a new sequence but the position counter
-     * carries over. A production implementation should adopt a similar approach.
+     * Resolution cache: maps (eventType, qualifiers) to matching consumer records.
      */
-    private final Map<String, AtomicInteger> roundRobinCounters = new ConcurrentHashMap<>();
+    private final ConcurrentMap<ResolutionKey, List<ConsumerRecord>> resolvedConsumers = new ConcurrentHashMap<>();
 
     /**
-     * Cache for type closures to avoid recomputing on every send.
+     * Round-robin counters keyed by resolution key.
      */
-    private final Map<Class<?>, Set<Class<?>>> typeClosureCache = new ConcurrentHashMap<>();
+    private final ConcurrentMap<ResolutionKey, AtomicInteger> roundRobinCounters = new ConcurrentHashMap<>();
 
-    public EventDispatcher(EventBus eventBus) {
+    public EventDispatcher(EventBus eventBus, BeanContainer beanContainer) {
         this.eventBus = eventBus;
+        this.beanContainer = beanContainer;
     }
 
     /**
      * Register a consumer for the given observed type and qualifiers.
-     * The consumer will receive events whose runtime type has {@code observedType}
-     * in its type closure, and whose qualifiers match.
      *
-     * @param observedType the type this consumer observes
-     * @param qualifiers qualifier names for routing (sorted deterministically)
+     * @param observedType the type this consumer observes (may be parameterized)
+     * @param qualifiers qualifier annotations for routing
      * @param address the unique Vert.x address for this consumer
      * @return a registration handle for unregistering
      */
-    public EventConsumerRegistration registerConsumer(Class<?> observedType, Set<String> qualifiers, String address) {
-        ConsumerKey key = new ConsumerKey(observedType, qualifiers);
-        ConsumerEntry entry = new ConsumerEntry(address);
-        consumers.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(entry);
+    public EventConsumerRegistration registerConsumer(Type observedType, Set<Annotation> qualifiers, String address) {
+        ConsumerRecord record = new ConsumerRecord(observedType, qualifiers, address);
+        consumers.put(address, record);
+        invalidateCache(record);
         return () -> {
-            List<ConsumerEntry> entries = consumers.get(key);
-            if (entries != null) {
-                entries.remove(entry);
-            }
+            consumers.remove(address);
+            invalidateCache(record);
             return Uni.createFrom().voidItem();
         };
     }
@@ -86,134 +72,95 @@ public class EventDispatcher {
     /**
      * Publish an event to ALL matching consumers.
      */
-    public void publish(Object event, Collection<Annotation> qualifiers) {
+    public void publish(Object event, Type eventType, Collection<Annotation> qualifiers) {
         ensureCodec(event.getClass());
-        List<ConsumerEntry> matching = resolveConsumers(event.getClass(), qualifierNames(qualifiers));
-        for (ConsumerEntry entry : matching) {
-            eventBus.publish(entry.address, event);
+        List<ConsumerRecord> matching = resolveConsumers(eventType, qualifierSet(qualifiers));
+        for (ConsumerRecord record : matching) {
+            eventBus.publish(record.address, event);
         }
     }
 
     /**
      * Send an event to ONE matching consumer (round-robin).
      */
-    public void send(Object event, Collection<Annotation> qualifiers) {
+    public void send(Object event, Type eventType, Collection<Annotation> qualifiers) {
         ensureCodec(event.getClass());
-        Set<String> qualifierNames = qualifierNames(qualifiers);
-        List<ConsumerEntry> matching = resolveConsumers(event.getClass(), qualifierNames);
-        if (matching.isEmpty()) {
-            return;
+        ConsumerRecord selected = nextConsumer(eventType, qualifierSet(qualifiers));
+        if (selected != null) {
+            eventBus.send(selected.address, event);
         }
-        String counterKey = event.getClass().getName() + qualifierSuffix(qualifierNames);
-        AtomicInteger counter = roundRobinCounters.computeIfAbsent(counterKey, k -> new AtomicInteger(0));
-        int index = Math.abs(counter.getAndIncrement() % matching.size());
-        eventBus.send(matching.get(index).address, event);
     }
 
     /**
      * Send an event to ONE matching consumer and wait for a reply.
-     * <p>
-     * TODO: The reply type is not validated — if the consumer returns a type that doesn't match
-     * what the caller expects, a ClassCastException will occur at the call site. Consider adding
-     * an assignability check on the reply before returning it.
      */
-    public <R> Uni<R> request(Object event, Collection<Annotation> qualifiers) {
+    public <R> Uni<R> request(Object event, Type eventType, Collection<Annotation> qualifiers) {
         ensureCodec(event.getClass());
-        Set<String> qualifierNames = qualifierNames(qualifiers);
-        List<ConsumerEntry> matching = resolveConsumers(event.getClass(), qualifierNames);
-        if (matching.isEmpty()) {
+        ConsumerRecord selected = nextConsumer(eventType, qualifierSet(qualifiers));
+        if (selected == null) {
             return Uni.createFrom().failure(
-                    new IllegalStateException("No consumers registered for event type: " + event.getClass().getName()));
+                    new IllegalStateException("No consumers registered for event type: " + eventType));
         }
-        String counterKey = event.getClass().getName() + qualifierSuffix(qualifierNames);
-        AtomicInteger counter = roundRobinCounters.computeIfAbsent(counterKey, k -> new AtomicInteger(0));
-        int index = Math.abs(counter.getAndIncrement() % matching.size());
-        return eventBus.<R> request(matching.get(index).address, event)
+        return eventBus.<R> request(selected.address, event)
                 .onItem().transform(Message::body);
     }
 
     /**
-     * Resolve all consumers that match the given event type and qualifiers.
-     * Computes the type closure of {@code eventType} and finds consumers
-     * whose observed type is in that closure with matching qualifiers.
+     * Select the next consumer in round-robin order from matching consumers.
+     *
+     * @return the selected consumer, or {@code null} if no consumers match
      */
-    private List<ConsumerEntry> resolveConsumers(Class<?> eventType, Set<String> qualifierNames) {
-        Set<Class<?>> typeClosure = getTypeClosure(eventType);
-        List<ConsumerEntry> result = new ArrayList<>();
-        for (Class<?> type : typeClosure) {
-            ConsumerKey key = new ConsumerKey(type, qualifierNames);
-            List<ConsumerEntry> entries = consumers.get(key);
-            if (entries != null) {
-                result.addAll(entries);
+    private ConsumerRecord nextConsumer(Type eventType, Set<Annotation> qualifiers) {
+        ResolutionKey key = new ResolutionKey(eventType, qualifiers);
+        List<ConsumerRecord> matching = resolvedConsumers.computeIfAbsent(key, this::computeMatching);
+        if (matching.isEmpty()) {
+            return null;
+        }
+        AtomicInteger counter = roundRobinCounters.computeIfAbsent(key, k -> new AtomicInteger(0));
+        int index = Math.abs(counter.getAndIncrement() % matching.size());
+        return matching.get(index);
+    }
+
+    /**
+     * Resolve all consumers matching the given event type and qualifiers using CDI's isMatchingEvent.
+     */
+    private List<ConsumerRecord> resolveConsumers(Type eventType, Set<Annotation> qualifiers) {
+        return resolvedConsumers.computeIfAbsent(new ResolutionKey(eventType, qualifiers), this::computeMatching);
+    }
+
+    private List<ConsumerRecord> computeMatching(ResolutionKey key) {
+        List<ConsumerRecord> matching = new ArrayList<>();
+        for (ConsumerRecord record : consumers.values()) {
+            if (beanContainer.isMatchingEvent(key.eventType, key.qualifiers,
+                    record.observedType, record.qualifiers)) {
+                matching.add(record);
             }
         }
-        return result;
+        return matching;
     }
 
     /**
-     * Compute the type closure of a class — all supertypes and interfaces, recursively.
-     * Uses {@code Class.getSuperclass()} and {@code Class.getInterfaces()} which work in native mode.
+     * Invalidate cached resolutions that could be affected by a consumer change.
      */
-    private Set<Class<?>> getTypeClosure(Class<?> type) {
-        return typeClosureCache.computeIfAbsent(type, t -> {
-            Set<Class<?>> closure = new HashSet<>();
-            collectTypeClosure(t, closure);
-            return closure;
-        });
+    private void invalidateCache(ConsumerRecord record) {
+        resolvedConsumers.keySet().removeIf(key -> beanContainer.isMatchingEvent(key.eventType, key.qualifiers,
+                record.observedType, record.qualifiers));
     }
 
-    private void collectTypeClosure(Class<?> type, Set<Class<?>> closure) {
-        if (type == null || type == Object.class || !closure.add(type)) {
-            return;
-        }
-        collectTypeClosure(type.getSuperclass(), closure);
-        for (Class<?> iface : type.getInterfaces()) {
-            collectTypeClosure(iface, closure);
-        }
-    }
-
-    /**
-     * Ensure a codec is registered for the given event type.
-     * Needed for types not known at build time (e.g., programmatic consumers).
-     */
     private void ensureCodec(Class<?> eventType) {
         EventsRecorder.registerCodecForType(eventType);
     }
 
-    private Set<String> qualifierNames(Collection<Annotation> qualifiers) {
+    private static Set<Annotation> qualifierSet(Collection<Annotation> qualifiers) {
         if (qualifiers == null || qualifiers.isEmpty()) {
             return Set.of();
         }
-        Set<String> names = new HashSet<>();
-        for (Annotation a : qualifiers) {
-            names.add(a.annotationType().getName());
-        }
-        return names;
+        return Set.copyOf(qualifiers);
     }
 
-    private String qualifierSuffix(Set<String> qualifierNames) {
-        if (qualifierNames.isEmpty()) {
-            return "";
-        }
-        // Sort for deterministic keys regardless of iteration order
-        List<String> sorted = new ArrayList<>(qualifierNames);
-        sorted.sort(null);
-        StringBuilder sb = new StringBuilder();
-        for (String name : sorted) {
-            sb.append('#').append(name);
-        }
-        return sb.toString();
+    private record ConsumerRecord(Type observedType, Set<Annotation> qualifiers, String address) {
     }
 
-    /**
-     * Key for the consumer registry — observed type + qualifier names.
-     */
-    private record ConsumerKey(Class<?> observedType, Set<String> qualifierNames) {
-    }
-
-    /**
-     * Entry in the consumer registry — the unique Vert.x address for a consumer.
-     */
-    private record ConsumerEntry(String address) {
+    private record ResolutionKey(Type eventType, Set<Annotation> qualifiers) {
     }
 }

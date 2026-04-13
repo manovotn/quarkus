@@ -1,6 +1,7 @@
 package io.quarkus.events.runtime;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Type;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -14,44 +15,46 @@ import io.smallrye.mutiny.Uni;
  * Runtime implementation of {@link QuarkusEvent}.
  * Delegates to the {@link EventDispatcher} for type-safe routing.
  * <p>
- * The dispatcher is resolved lazily from {@link EventsRecorder#dispatcher}
- * to avoid accessing runtime-init beans during static init.
+ * Stores the full event {@link Type} (including parameterized type info)
+ * captured from the injection point by {@link QuarkusEventProducer}.
  */
 public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
 
     private static final AtomicLong CONSUMER_ID = new AtomicLong(0);
 
+    private final Type eventType;
     private final Set<Annotation> qualifiers;
 
-    public QuarkusEventImpl(Set<Annotation> qualifiers) {
+    public QuarkusEventImpl(Type eventType, Set<Annotation> qualifiers) {
+        this.eventType = eventType;
         this.qualifiers = qualifiers != null ? Set.copyOf(qualifiers) : Set.of();
     }
 
     @Override
     public void publish(T event) {
-        dispatcher().publish(event, qualifiers);
+        dispatcher().publish(event, eventType, qualifiers);
     }
 
     @Override
     public void send(T event) {
-        dispatcher().send(event, qualifiers);
+        dispatcher().send(event, eventType, qualifiers);
     }
 
     @Override
     public <R> Uni<R> request(T event, Class<R> replyType) {
-        return dispatcher().request(event, qualifiers);
+        return dispatcher().request(event, eventType, qualifiers);
     }
 
     @Override
     public <U extends T> QuarkusEvent<U> select(Class<U> subtype, Annotation... qualifiers) {
         Set<Annotation> merged = mergeQualifiers(qualifiers);
-        return new QuarkusEventImpl<>(merged);
+        return new QuarkusEventImpl<>(subtype, merged);
     }
 
     @Override
     public QuarkusEvent<T> select(Annotation... qualifiers) {
         Set<Annotation> merged = mergeQualifiers(qualifiers);
-        return new QuarkusEventImpl<>(merged);
+        return new QuarkusEventImpl<>(eventType, merged);
     }
 
     @Override
@@ -72,11 +75,7 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
         });
 
         // Register in the dispatcher for type-based routing
-        Set<String> qualifierNames = new HashSet<>();
-        for (Annotation a : this.qualifiers) {
-            qualifierNames.add(a.annotationType().getName());
-        }
-        EventConsumerRegistration dispatcherReg = dispatcher().registerConsumer(eventType, qualifierNames, address);
+        EventConsumerRegistration dispatcherReg = dispatcher().registerConsumer(eventType, this.qualifiers, address);
 
         return () -> {
             vertxConsumer.unregister();

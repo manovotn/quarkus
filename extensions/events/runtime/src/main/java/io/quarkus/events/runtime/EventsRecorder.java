@@ -3,7 +3,6 @@ package io.quarkus.events.runtime;
 import static io.quarkus.vertx.core.runtime.context.VertxContextSafetyToggle.setCurrentContextSafe;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -14,6 +13,7 @@ import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.arc.Arc;
 import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.vertx.LocalEventBusCodec;
@@ -43,7 +43,7 @@ public class EventsRecorder {
 
         io.vertx.mutiny.core.eventbus.EventBus mutinyEventBus = new io.vertx.mutiny.core.eventbus.EventBus(
                 vertx.eventBus());
-        dispatcher = new EventDispatcher(mutinyEventBus);
+        dispatcher = new EventDispatcher(mutinyEventBus, Arc.container().beanManager());
 
         registerConsumers(consumers);
 
@@ -70,7 +70,7 @@ public class EventsRecorder {
      * Register a default codec for an event type if not already registered.
      * Called by {@link EventDispatcher} at send time for on-demand codec registration.
      */
-    @SuppressWarnings({ "unchecked", "rawtypes" })
+    @SuppressWarnings("unchecked")
     static void registerCodecForType(Class<?> eventType) {
         if (vertx == null || !registeredCodecs.add(eventType)) {
             return;
@@ -103,13 +103,14 @@ public class EventsRecorder {
             // Each consumer gets a unique address
             String address = "__qx_event__/consumer/" + consumerId++;
 
-            // Register in the dispatcher for type-based routing
+            // Load the generated metadata class to get Type and Annotation objects
             try {
-                Class<?> observedType = Class.forName(info.getObservedType(),
-                        false, Thread.currentThread().getContextClassLoader());
-                dispatcher.registerConsumer(observedType, new HashSet<>(info.getQualifierNames()), address);
-            } catch (ClassNotFoundException e) {
-                LOGGER.warnf("Could not load observed type %s for dispatcher registration", info.getObservedType());
+                ClassLoader tccl = Thread.currentThread().getContextClassLoader();
+                ConsumerMetadata metadata = (ConsumerMetadata) tccl.loadClass(info.getMetadataClassName())
+                        .getConstructor().newInstance();
+                dispatcher.registerConsumer(metadata.observedType(), metadata.qualifiers(), address);
+            } catch (Exception e) {
+                LOGGER.errorf(e, "Unable to load consumer metadata: %s", info.getMetadataClassName());
             }
 
             // Register a Vert.x consumer on the unique address

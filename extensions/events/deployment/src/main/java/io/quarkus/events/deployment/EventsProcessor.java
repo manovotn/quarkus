@@ -1,18 +1,20 @@
 package io.quarkus.events.deployment;
 
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.jboss.jandex.AnnotationInstance;
-import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.MethodInfo;
-import org.jboss.jandex.Type;
 import org.jboss.logging.Logger;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.AutoAddScopeBuildItem;
+import io.quarkus.arc.deployment.BeanArchiveIndexBuildItem;
 import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem;
 import io.quarkus.arc.deployment.InvokerFactoryBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
@@ -22,6 +24,8 @@ import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.InvokerBuilder;
 import io.quarkus.arc.processor.InvokerInfo;
+import io.quarkus.arc.processor.RuntimeTypeCreator;
+import io.quarkus.deployment.GeneratedClassGizmo2Adaptor;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
@@ -29,12 +33,24 @@ import io.quarkus.deployment.annotations.Produce;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
+import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.events.OnEvent;
+import io.quarkus.events.runtime.ConsumerMetadata;
 import io.quarkus.events.runtime.EventConsumerInfo;
 import io.quarkus.events.runtime.EventsRecorder;
+import io.quarkus.gizmo2.ClassOutput;
+import io.quarkus.gizmo2.Expr;
+import io.quarkus.gizmo2.Gizmo;
+import io.quarkus.gizmo2.LocalVar;
+import io.quarkus.gizmo2.desc.ConstructorDesc;
+import io.quarkus.gizmo2.desc.FieldDesc;
+import io.quarkus.gizmo2.desc.MethodDesc;
+import io.quarkus.runtime.util.HashUtil;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.smallrye.mutiny.Uni;
 
@@ -101,7 +117,8 @@ public class EventsProcessor {
                             method, bean));
                 }
 
-                Type paramType = method.parameterType(0);
+                // Preserve the full Jandex Type (including parameterized type info)
+                org.jboss.jandex.Type paramType = method.parameterType(0);
                 DotName observedTypeName = paramType.name();
 
                 // Validate: no overly broad types
@@ -111,8 +128,8 @@ public class EventsProcessor {
                             observedTypeName, method, bean));
                 }
 
-                // Extract qualifier annotations from the event parameter
-                List<String> qualifierNames = extractQualifiers(method, annotationStore, combinedIndex);
+                // Extract qualifier AnnotationInstances from the event parameter
+                List<AnnotationInstance> qualifiers = extractQualifiers(method, annotationStore, combinedIndex);
 
                 // Build invoker: transform Message<Object> param to the body
                 InvokerBuilder builder = invokerFactory.createInvoker(bean, method)
@@ -129,9 +146,9 @@ public class EventsProcessor {
                 boolean ordered = onEvent.value("ordered") != null && onEvent.value("ordered").asBoolean();
 
                 eventConsumers.produce(new EventConsumerBuildItem(
-                        observedTypeName.toString(), qualifierNames, invoker, blocking, ordered));
+                        paramType, qualifiers, invoker, blocking, ordered));
                 LOGGER.debugf("Found @OnEvent consumer: %s on %s (type: %s, qualifiers: %s)",
-                        method, bean, observedTypeName, qualifierNames);
+                        method, bean, paramType, qualifiers);
             }
         }
     }
@@ -141,20 +158,106 @@ public class EventsProcessor {
     @Produce(ServiceStartBuildItem.class)
     void registerConsumers(
             EventsRecorder recorder,
+            BeanRegistrationPhaseBuildItem beanRegistration,
+            BeanArchiveIndexBuildItem beanArchiveIndex,
             CoreVertxBuildItem vertx,
             List<EventConsumerBuildItem> eventConsumers,
             ShutdownContextBuildItem shutdown,
-            RecorderContext recorderContext) {
+            RecorderContext recorderContext,
+            BuildProducer<GeneratedClassBuildItem> generatedClasses,
+            BuildProducer<GeneratedResourceBuildItem> generatedResources,
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClasses) {
+
+        ClassOutput classOutput = new GeneratedClassGizmo2Adaptor(generatedClasses, generatedResources,
+                new Function<String, String>() {
+                    @Override
+                    public String apply(String generatedClassName) {
+                        // Map generated class to the declaring class for class loading
+                        return generatedClassName.substring(0, generatedClassName.indexOf("_EventMeta_"));
+                    }
+                });
+        Gizmo gizmo = Gizmo.create(classOutput)
+                .withDebugInfo(false)
+                .withParameters(false);
 
         List<EventConsumerInfo> consumerInfos = new ArrayList<>();
+        List<String> metadataClassNames = new ArrayList<>();
 
         for (EventConsumerBuildItem consumer : eventConsumers) {
+            // Generate a unique metadata class name
+            String metadataClassName = consumer.getObservedType().name().toString()
+                    + "_EventMeta_"
+                    + HashUtil.sha256(consumer.getObservedType().toString()
+                            + consumer.getQualifiers().stream().map(Object::toString).collect(Collectors.joining(",")));
+
+            gizmo.class_(metadataClassName, cc -> {
+                cc.implements_(ConsumerMetadata.class);
+
+                FieldDesc observedTypeField = cc.field("observedType", fc -> {
+                    fc.private_();
+                    fc.final_();
+                    fc.setType(Type.class);
+                });
+                FieldDesc qualifiersField = cc.field("qualifiers", fc -> {
+                    fc.private_();
+                    fc.final_();
+                    fc.setType(Set.class);
+                });
+
+                cc.constructor(con -> {
+                    con.body(bc -> {
+                        bc.invokeSpecial(ConstructorDesc.of(Object.class), cc.this_());
+
+                        LocalVar tccl = bc.localVar("tccl", bc.invokeVirtual(
+                                MethodDesc.of(Thread.class, "getContextClassLoader", ClassLoader.class),
+                                bc.currentThread()));
+
+                        // Create the observed Type
+                        RuntimeTypeCreator rttc = RuntimeTypeCreator.of(bc).withTCCL(tccl);
+                        bc.set(cc.this_().field(observedTypeField), rttc.create(consumer.getObservedType()));
+
+                        // Create the qualifier Set<Annotation>
+                        if (consumer.getQualifiers().isEmpty()) {
+                            bc.set(cc.this_().field(qualifiersField),
+                                    bc.invokeStatic(MethodDesc.of(Set.class, "of", Set.class)));
+                        } else {
+                            Expr qualifiersSet = bc.setOf(consumer.getQualifiers(),
+                                    qualifier -> beanRegistration.getBeanProcessor().getAnnotationLiteralProcessor()
+                                            .create(bc,
+                                                    beanArchiveIndex.getIndex().getClassByName(qualifier.name()),
+                                                    qualifier));
+                            bc.set(cc.this_().field(qualifiersField), qualifiersSet);
+                        }
+
+                        bc.return_();
+                    });
+                });
+
+                cc.method("observedType", mc -> {
+                    mc.returning(Type.class);
+                    mc.body(bc -> bc.return_(cc.this_().field(observedTypeField)));
+                });
+
+                cc.method("qualifiers", mc -> {
+                    mc.returning(Set.class);
+                    mc.body(bc -> bc.return_(cc.this_().field(qualifiersField)));
+                });
+            });
+
+            metadataClassNames.add(metadataClassName);
+
             consumerInfos.add(new EventConsumerInfo(
-                    consumer.getObservedType(),
-                    consumer.getQualifierNames(),
+                    metadataClassName,
                     recorderContext.newInstance(consumer.getInvoker().getClassName()),
                     consumer.isBlocking(),
                     consumer.isOrdered()));
+        }
+
+        // Register generated metadata classes for reflection
+        if (!metadataClassNames.isEmpty()) {
+            reflectiveClasses.produce(ReflectiveClassBuildItem.builder(metadataClassNames)
+                    .publicConstructors()
+                    .build());
         }
 
         recorder.init(vertx.getVertx(), consumerInfos, shutdown);
@@ -167,16 +270,11 @@ public class EventsProcessor {
     }
 
     /**
-     * Extract qualifier annotation names from the event parameter.
-     * A qualifier is any annotation on the method's first parameter that is itself
-     * meta-annotated with @jakarta.inject.Qualifier.
-     * <p>
-     * Qualifiers are placed on the parameter (not the method) to avoid ArC
-     * misinterpreting the method as a CDI producer method.
+     * Extract qualifier AnnotationInstances from the event parameter.
      */
-    private List<String> extractQualifiers(MethodInfo method, AnnotationStore annotationStore,
+    private List<AnnotationInstance> extractQualifiers(MethodInfo method, AnnotationStore annotationStore,
             CombinedIndexBuildItem combinedIndex) {
-        List<String> qualifiers = new ArrayList<>();
+        List<AnnotationInstance> qualifiers = new ArrayList<>();
         for (AnnotationInstance annotation : annotationStore.getAnnotations(method)) {
             // Only look at annotations on the first parameter (the event payload)
             if (annotation.target() == null
@@ -187,9 +285,9 @@ public class EventsProcessor {
                 continue;
             }
             DotName annotationName = annotation.name();
-            ClassInfo annotationClass = combinedIndex.getIndex().getClassByName(annotationName);
+            org.jboss.jandex.ClassInfo annotationClass = combinedIndex.getIndex().getClassByName(annotationName);
             if (annotationClass != null && annotationClass.hasAnnotation(QUALIFIER)) {
-                qualifiers.add(annotationName.toString());
+                qualifiers.add(annotation);
             }
         }
         return qualifiers;

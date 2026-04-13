@@ -5,7 +5,6 @@ import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.annotation.Annotation;
@@ -244,7 +243,11 @@ public class QualifiedEventsTest {
                 .request(new RequestEvent("Q-REQ-1"), String.class)
                 .await().atMost(java.time.Duration.ofSeconds(2));
 
-        assertEquals("Premium: Q-REQ-1", reply);
+        // CDI behavior: unqualified consumer also matches qualified events (catch-all).
+        // Both QualifiedRequestConsumer and UnqualifiedRequestConsumer match,
+        // so round-robin may pick either one.
+        assertTrue(reply.equals("Premium: Q-REQ-1") || reply.equals("Standard: Q-REQ-1"),
+                "Expected reply from either @Premium or unqualified consumer, got: " + reply);
     }
 
     @Test
@@ -284,20 +287,18 @@ public class QualifiedEventsTest {
     }
 
     @Test
-    public void testQualifiedDoesNotReachUnqualifiedConsumer() throws InterruptedException {
+    public void testQualifiedAlsoReachesUnqualifiedConsumer() throws InterruptedException {
+        // CDI behavior: unqualified consumer matches ALL events (catch-all).
+        // Send a @Premium event via publish() — both consumers should receive it.
         IsolationQualifiedConsumer.LATCH = new CountDownLatch(1);
         IsolationUnqualifiedConsumer.LATCH = new CountDownLatch(1);
 
-        // Send a @Premium event
-        isolationEvent.select(new PremiumLiteral()).send(new IsolationEvent("Q-ISO-1"));
+        isolationEvent.select(new PremiumLiteral()).publish(new IsolationEvent("Q-ISO-1"));
 
-        // Qualified consumer should receive it
         assertTrue(IsolationQualifiedConsumer.LATCH.await(2, TimeUnit.SECONDS),
                 "Qualified event should reach @Premium consumer");
-
-        // Unqualified consumer should NOT have received it
-        assertFalse(IsolationUnqualifiedConsumer.LATCH.await(500, TimeUnit.MILLISECONDS),
-                "Qualified event should NOT reach unqualified consumer");
+        assertTrue(IsolationUnqualifiedConsumer.LATCH.await(2, TimeUnit.SECONDS),
+                "Qualified event should also reach unqualified consumer (CDI catch-all)");
     }
 
     // --- Tests: Multiple qualifiers with different ordering ---

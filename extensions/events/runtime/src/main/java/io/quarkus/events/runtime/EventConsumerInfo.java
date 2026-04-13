@@ -1,7 +1,5 @@
 package io.quarkus.events.runtime;
 
-import java.util.List;
-
 import jakarta.enterprise.invoke.Invoker;
 
 import io.quarkus.runtime.RuntimeValue;
@@ -12,27 +10,21 @@ import io.quarkus.runtime.RuntimeValue;
  */
 public class EventConsumerInfo {
 
-    private final String observedType;
-    private final List<String> qualifierNames;
+    private final String metadataClassName;
     private final RuntimeValue<Invoker<Object, Object>> invoker;
     private final boolean blocking;
     private final boolean ordered;
 
-    public EventConsumerInfo(String observedType, List<String> qualifierNames,
+    public EventConsumerInfo(String metadataClassName,
             RuntimeValue<Invoker<Object, Object>> invoker, boolean blocking, boolean ordered) {
-        this.observedType = observedType;
-        this.qualifierNames = qualifierNames;
+        this.metadataClassName = metadataClassName;
         this.invoker = invoker;
         this.blocking = blocking;
         this.ordered = ordered;
     }
 
-    public String getObservedType() {
-        return observedType;
-    }
-
-    public List<String> getQualifierNames() {
-        return qualifierNames;
+    public String getMetadataClassName() {
+        return metadataClassName;
     }
 
     public RuntimeValue<Invoker<Object, Object>> getInvoker() {

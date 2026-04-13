@@ -1,6 +1,8 @@
 package io.quarkus.events.runtime;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -14,10 +16,10 @@ import io.quarkus.events.QuarkusEvent;
 /**
  * CDI producer for {@link QuarkusEvent} injection points.
  * Produces a {@code QuarkusEvent<T>} for any injection point type,
- * extracting qualifiers from the injection point annotations.
+ * extracting qualifiers and the full parameterized event type from the injection point.
  * <p>
- * The EventBus and EventDispatcher are resolved lazily from {@link EventsRecorder}
- * to avoid accessing runtime-init beans during static init.
+ * For {@code @Inject QuarkusEvent<Envelope<Order>>}, the event type is
+ * {@code Envelope<Order>} (not just {@code Envelope}), enabling parameterized type matching.
  */
 @ApplicationScoped
 public class QuarkusEventProducer {
@@ -26,9 +28,22 @@ public class QuarkusEventProducer {
     @SuppressWarnings({ "unchecked", "rawtypes" })
     <T> QuarkusEvent<T> produceQuarkusEvent(InjectionPoint injectionPoint) {
         Set<Annotation> qualifiers = extractQualifiers(injectionPoint);
-        // EventBus and dispatcher are resolved lazily inside QuarkusEventImpl
-        // to avoid accessing runtime-init synthetic beans during static init
-        return new QuarkusEventImpl(qualifiers);
+        Type eventType = extractEventType(injectionPoint);
+        return new QuarkusEventImpl(eventType, qualifiers);
+    }
+
+    /**
+     * Extract the event type from the injection point's type parameter.
+     * For {@code QuarkusEvent<Envelope<Order>>}, returns {@code Envelope<Order>}.
+     * For {@code QuarkusEvent<String>}, returns {@code String.class}.
+     */
+    private Type extractEventType(InjectionPoint injectionPoint) {
+        Type type = injectionPoint.getType();
+        if (type instanceof ParameterizedType pt && pt.getRawType().equals(QuarkusEvent.class)) {
+            return pt.getActualTypeArguments()[0];
+        }
+        // Fallback: raw type (shouldn't happen with proper injection)
+        return Object.class;
     }
 
     private Set<Annotation> extractQualifiers(InjectionPoint injectionPoint) {
