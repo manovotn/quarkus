@@ -20,6 +20,6 @@ public interface ConsumerMetadata {
     /**
      * Metadata for a single consumer.
      */
-    record Entry(Type observedType, Set<Annotation> qualifiers) {
+    record Entry(Type observedType, Set<Annotation> qualifiers, Type responseType) {
     }
 }

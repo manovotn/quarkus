@@ -43,7 +43,7 @@ public class MultiParamConsumerTest {
         CdiParamConsumer.LATCH = new CountDownLatch(1);
         CdiParamConsumer.BM_WAS_NON_NULL.set(false);
 
-        taskEvent.send(new Task("inject-test"));
+        taskEvent.publish(new Task("inject-test"));
 
         assertTrue(CdiParamConsumer.LATCH.await(2, TimeUnit.SECONDS),
                 "Consumer with CDI parameter should receive the event");

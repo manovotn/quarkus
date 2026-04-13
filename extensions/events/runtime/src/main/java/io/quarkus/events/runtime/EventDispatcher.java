@@ -19,10 +19,10 @@ import io.vertx.mutiny.core.eventbus.Message;
 /**
  * Central event dispatcher that uses CDI's {@code isMatchingEvent} for type-safe resolution.
  * <p>
- * Each consumer registers with its observed {@link Type} and qualifier {@link Annotation}s.
- * When an event is sent, the dispatcher iterates all consumers and uses
- * {@link BeanContainer#isMatchingEvent} to find matches. Results are cached and
- * invalidated when consumers are added or removed.
+ * Each consumer registers with its observed {@link Type}, qualifier {@link Annotation}s,
+ * and optional response {@link Type}. When an event is sent, the dispatcher iterates all
+ * consumers and uses {@link BeanContainer#isMatchingEvent} to find matches. Results are
+ * cached and invalidated when consumers are added or removed.
  */
 public class EventDispatcher {
 
@@ -38,8 +38,21 @@ public class EventDispatcher {
         this.beanContainer = beanContainer;
     }
 
+    /**
+     * Register a consumer with no response type (fire-and-forget or programmatic).
+     */
     public EventConsumerRegistration registerConsumer(Type observedType, Set<Annotation> qualifiers, String address) {
-        ConsumerRecord record = new ConsumerRecord(observedType, qualifiers, address);
+        return registerConsumer(observedType, qualifiers, null, address);
+    }
+
+    /**
+     * Register a consumer with its observed type, qualifiers, response type, and Vert.x address.
+     *
+     * @param responseType the consumer's return type, or {@code null} for void consumers
+     */
+    public EventConsumerRegistration registerConsumer(Type observedType, Set<Annotation> qualifiers,
+            Type responseType, String address) {
+        ConsumerRecord record = new ConsumerRecord(observedType, qualifiers, responseType, address);
         consumers.put(address, record);
         invalidateCache(record);
         return () -> {
@@ -50,40 +63,44 @@ public class EventDispatcher {
     }
 
     /**
-     * Publish an event to ALL matching consumers.
+     * Publish an event to ALL matching consumers (regardless of response type).
      */
     public void publish(EventEnvelope envelope) {
-        List<ConsumerRecord> matching = resolveConsumers(envelope.eventType(), envelope.qualifiers());
+        List<ConsumerRecord> matching = resolveConsumers(
+                new ResolutionKey(envelope.eventType(), envelope.qualifiers(), null));
         for (ConsumerRecord record : matching) {
             eventBus.publish(record.address, envelope);
         }
     }
 
     /**
-     * Send an event to ONE matching consumer (round-robin).
+     * Send an event to ONE matching consumer, round-robin (regardless of response type).
      */
     public void send(EventEnvelope envelope) {
-        ConsumerRecord selected = nextConsumer(envelope.eventType(), envelope.qualifiers());
+        ConsumerRecord selected = nextConsumer(
+                new ResolutionKey(envelope.eventType(), envelope.qualifiers(), null));
         if (selected != null) {
             eventBus.send(selected.address, envelope);
         }
     }
 
     /**
-     * Send an event to ONE matching consumer and wait for a reply.
+     * Send an event to ONE matching consumer that can produce the requested response type.
+     * Void consumers and consumers with incompatible return types are excluded.
      */
-    public <R> Uni<R> request(EventEnvelope envelope) {
-        ConsumerRecord selected = nextConsumer(envelope.eventType(), envelope.qualifiers());
+    public <R> Uni<R> request(EventEnvelope envelope, Type responseType) {
+        ConsumerRecord selected = nextConsumer(
+                new ResolutionKey(envelope.eventType(), envelope.qualifiers(), responseType));
         if (selected == null) {
             return Uni.createFrom().failure(
-                    new IllegalStateException("No consumers registered for event type: " + envelope.eventType()));
+                    new IllegalStateException("No consumers registered for event type: " + envelope.eventType()
+                            + " with response type: " + responseType));
         }
         return eventBus.<R> request(selected.address, envelope)
                 .onItem().transform(Message::body);
     }
 
-    private ConsumerRecord nextConsumer(Type eventType, Set<Annotation> qualifiers) {
-        ResolutionKey key = new ResolutionKey(eventType, qualifiers);
+    private ConsumerRecord nextConsumer(ResolutionKey key) {
         List<ConsumerRecord> matching = resolvedConsumers.computeIfAbsent(key, this::computeMatching);
         if (matching.isEmpty()) {
             return null;
@@ -93,17 +110,30 @@ public class EventDispatcher {
         return matching.get(index);
     }
 
-    private List<ConsumerRecord> resolveConsumers(Type eventType, Set<Annotation> qualifiers) {
-        return resolvedConsumers.computeIfAbsent(new ResolutionKey(eventType, qualifiers), this::computeMatching);
+    private List<ConsumerRecord> resolveConsumers(ResolutionKey key) {
+        return resolvedConsumers.computeIfAbsent(key, this::computeMatching);
     }
 
     private List<ConsumerRecord> computeMatching(ResolutionKey key) {
         List<ConsumerRecord> matching = new ArrayList<>();
         for (ConsumerRecord record : consumers.values()) {
-            if (beanContainer.isMatchingEvent(key.eventType, key.qualifiers,
+            if (!beanContainer.isMatchingEvent(key.eventType, key.qualifiers,
                     record.observedType, record.qualifiers)) {
-                matching.add(record);
+                continue;
             }
+            // If a response type is requested, filter by assignability
+            if (key.responseType != null) {
+                if (record.responseType == null) {
+                    // void consumer cannot satisfy a request
+                    continue;
+                }
+                if (!beanContainer.isMatchingEvent(record.responseType, Set.of(),
+                        key.responseType, Set.of())) {
+                    // consumer's return type is not assignable to the requested type
+                    continue;
+                }
+            }
+            matching.add(record);
         }
         return matching;
     }
@@ -113,9 +143,9 @@ public class EventDispatcher {
                 record.observedType, record.qualifiers));
     }
 
-    private record ConsumerRecord(Type observedType, Set<Annotation> qualifiers, String address) {
+    private record ConsumerRecord(Type observedType, Set<Annotation> qualifiers, Type responseType, String address) {
     }
 
-    private record ResolutionKey(Type eventType, Set<Annotation> qualifiers) {
+    private record ResolutionKey(Type eventType, Set<Annotation> qualifiers, Type responseType) {
     }
 }

@@ -43,6 +43,7 @@ import io.quarkus.events.runtime.ConsumerMetadata;
 import io.quarkus.events.runtime.EventConsumerInfo;
 import io.quarkus.events.runtime.EventsRecorder;
 import io.quarkus.gizmo2.ClassOutput;
+import io.quarkus.gizmo2.Const;
 import io.quarkus.gizmo2.Expr;
 import io.quarkus.gizmo2.Gizmo;
 import io.quarkus.gizmo2.LocalVar;
@@ -149,8 +150,17 @@ public class EventsProcessor {
                     }
                 }
 
-                if (method.returnType().name().equals(UNI)) {
+                // Determine the response type (unwrap Uni<T> to T, void to null)
+                Type responseType = null;
+                Type returnType = method.returnType();
+                if (returnType.kind() == Type.Kind.VOID) {
+                    responseType = null;
+                } else if (returnType.name().equals(UNI)) {
+                    // Uni<T> -> T
+                    responseType = returnType.asParameterizedType().arguments().get(0);
                     builder.withReturnValueTransformer(Uni.class, "subscribeAsCompletionStage");
+                } else {
+                    responseType = returnType;
                 }
 
                 InvokerInfo invoker = builder.build();
@@ -159,7 +169,7 @@ public class EventsProcessor {
                 boolean ordered = onEvent.value("ordered") != null && onEvent.value("ordered").asBoolean();
 
                 eventConsumers.produce(new EventConsumerBuildItem(
-                        paramType, qualifiers, invoker, blocking, ordered,
+                        paramType, responseType, qualifiers, invoker, blocking, ordered,
                         method.parametersCount(), eventInfoPosition));
                 LOGGER.debugf("Found @OnEvent consumer: %s on %s (type: %s, qualifiers: %s)",
                         method, bean, paramType, qualifiers);
@@ -232,7 +242,15 @@ public class EventsProcessor {
                                                         qualifier));
                             }
 
-                            return bc.new_(ConsumerMetadata.Entry.class, observedType, qualifiers);
+                            // Create the response Type (null for void consumers)
+                            Expr responseType;
+                            if (consumer.getResponseType() != null) {
+                                responseType = rttc.create(consumer.getResponseType());
+                            } else {
+                                responseType = Const.ofNull(java.lang.reflect.Type.class);
+                            }
+
+                            return bc.new_(ConsumerMetadata.Entry.class, observedType, qualifiers, responseType);
                         });
 
                         bc.return_(list);

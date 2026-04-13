@@ -50,7 +50,7 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
 
     @Override
     public <R> Uni<R> request(T event, Class<R> replyType) {
-        return dispatcher().request(createEnvelope(event));
+        return dispatcher().request(createEnvelope(event), replyType);
     }
 
     @Override

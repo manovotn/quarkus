@@ -119,9 +119,9 @@ public class EventsRecorder {
             // Each consumer gets a unique address
             String address = "__qx_event__/consumer/" + consumerId;
 
-            // Register in the dispatcher with type/qualifier metadata from the generated registry
+            // Register in the dispatcher with type/qualifier/response metadata from the generated registry
             ConsumerMetadata.Entry entry = metadataEntries.get(consumerId);
-            dispatcher.registerConsumer(entry.observedType(), entry.qualifiers(), address);
+            dispatcher.registerConsumer(entry.observedType(), entry.qualifiers(), entry.responseType(), address);
 
             consumerId++;
 
