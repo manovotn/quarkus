@@ -2,7 +2,9 @@ package io.quarkus.events.runtime;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -24,54 +26,67 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
 
     private final Type eventType;
     private final Set<Annotation> qualifiers;
+    private final Map<String, Object> metadata;
 
     public QuarkusEventImpl(Type eventType, Set<Annotation> qualifiers) {
+        this(eventType, qualifiers, null);
+    }
+
+    private QuarkusEventImpl(Type eventType, Set<Annotation> qualifiers, Map<String, Object> metadata) {
         this.eventType = eventType;
         this.qualifiers = qualifiers != null ? Set.copyOf(qualifiers) : Set.of();
+        this.metadata = metadata;
     }
 
     @Override
     public void publish(T event) {
-        dispatcher().publish(event, eventType, qualifiers);
+        dispatcher().publish(createEnvelope(event));
     }
 
     @Override
     public void send(T event) {
-        dispatcher().send(event, eventType, qualifiers);
+        dispatcher().send(createEnvelope(event));
     }
 
     @Override
     public <R> Uni<R> request(T event, Class<R> replyType) {
-        return dispatcher().request(event, eventType, qualifiers);
+        return dispatcher().request(createEnvelope(event));
     }
 
     @Override
     public <U extends T> QuarkusEvent<U> select(Class<U> subtype, Annotation... qualifiers) {
-        Set<Annotation> merged = mergeQualifiers(qualifiers);
-        return new QuarkusEventImpl<>(subtype, merged);
+        return new QuarkusEventImpl<>(subtype, mergeQualifiers(qualifiers), metadata);
     }
 
     @Override
     public QuarkusEvent<T> select(Annotation... qualifiers) {
-        Set<Annotation> merged = mergeQualifiers(qualifiers);
-        return new QuarkusEventImpl<>(eventType, merged);
+        return new QuarkusEventImpl<>(eventType, mergeQualifiers(qualifiers), metadata);
+    }
+
+    @Override
+    public QuarkusEvent<T> withMetadata(String key, Object value) {
+        // Copy the map on each call to ensure the base instance is not mutated.
+        // Without the copy, reusing the base instance after withMetadata() would leak
+        // metadata entries into unrelated emissions. The map is small (typically 1-2 entries)
+        // so the copy cost is negligible.
+        Map<String, Object> newMetadata = metadata != null ? new HashMap<>(metadata) : new HashMap<>();
+        newMetadata.put(key, value);
+        return new QuarkusEventImpl<>(eventType, qualifiers, newMetadata);
     }
 
     @Override
     public EventConsumerRegistration consumer(Class<T> eventType, Consumer<T> handler) {
         String address = "__qx_event__/programmatic/" + CONSUMER_ID.getAndIncrement();
 
-        // Ensure a codec is registered for this type
-        EventsRecorder.registerCodecForType(eventType);
-
         // Register a Vert.x consumer on the unique address
-        var eventBus = io.quarkus.arc.Arc.container()
+        // (EventEnvelope codec is already registered at init time)
+        io.vertx.mutiny.core.eventbus.EventBus eventBus = io.quarkus.arc.Arc.container()
                 .instance(io.vertx.mutiny.core.eventbus.EventBus.class).get();
-        var vertxConsumer = eventBus.localConsumer(address);
+        io.vertx.mutiny.core.eventbus.MessageConsumer<Object> vertxConsumer = eventBus.localConsumer(address);
         vertxConsumer.handler(message -> {
             @SuppressWarnings("unchecked")
-            T body = (T) message.body();
-            handler.accept(body);
+            T event = (T) ((EventEnvelope) message.body()).event();
+            handler.accept(event);
         });
 
         // Register in the dispatcher for type-based routing
@@ -81,6 +96,12 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
             vertxConsumer.unregister();
             return dispatcherReg.unregister();
         };
+    }
+
+    private EventEnvelope createEnvelope(T event) {
+        return new EventEnvelope(event,
+                metadata != null ? Map.copyOf(metadata) : Map.of(),
+                eventType, qualifiers);
     }
 
     private EventDispatcher dispatcher() {

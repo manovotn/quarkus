@@ -11,26 +11,41 @@ import io.vertx.core.eventbus.Message;
 
 /**
  * Invokes a business method annotated with {@link io.quarkus.events.OnEvent}.
- * Manages CDI request context activation per delivery.
+ * Manages CDI request context activation per delivery and builds the argument
+ * array from the {@link EventEnvelope}.
  */
 public class EventsConsumerInvoker {
 
     private final Invoker<Object, Object> invoker;
+    private final int parameterCount;
+    private final int eventInfoPosition;
 
-    public EventsConsumerInvoker(Invoker<Object, Object> invoker) {
+    public EventsConsumerInvoker(Invoker<Object, Object> invoker, int parameterCount, int eventInfoPosition) {
         this.invoker = invoker;
+        this.parameterCount = parameterCount;
+        this.eventInfoPosition = eventInfoPosition;
     }
 
     public void invoke(Message<Object> message) throws Exception {
+        EventEnvelope envelope = (EventEnvelope) message.body();
+
+        // Build args array: event at position 0, EventInfo at its position, nulls for CDI-injected params
+        Object[] args = new Object[parameterCount];
+        args[0] = envelope.event();
+        if (eventInfoPosition >= 0) {
+            args[eventInfoPosition] = new EventInfoImpl(envelope);
+        }
+        // Other positions stay null — the ArC invoker with withArgumentLookup() handles them
+
         ManagedContext requestContext = Arc.container().requestContext();
         if (requestContext.isActive()) {
-            Object ret = invoker.invoke(null, new Object[] { message });
+            Object ret = invoker.invoke(null, args);
             handleReturn(ret, message, null);
         } else {
             requestContext.activate();
             Object ret;
             try {
-                ret = invoker.invoke(null, new Object[] { message });
+                ret = invoker.invoke(null, args);
             } catch (Exception e) {
                 requestContext.terminate();
                 throw e;

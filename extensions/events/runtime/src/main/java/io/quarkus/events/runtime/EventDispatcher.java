@@ -3,7 +3,6 @@ package io.quarkus.events.runtime;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,19 +29,8 @@ public class EventDispatcher {
     private final EventBus eventBus;
     private final BeanContainer beanContainer;
 
-    /**
-     * All registered consumers, keyed by unique consumer ID.
-     */
     private final ConcurrentMap<String, ConsumerRecord> consumers = new ConcurrentHashMap<>();
-
-    /**
-     * Resolution cache: maps (eventType, qualifiers) to matching consumer records.
-     */
     private final ConcurrentMap<ResolutionKey, List<ConsumerRecord>> resolvedConsumers = new ConcurrentHashMap<>();
-
-    /**
-     * Round-robin counters keyed by resolution key.
-     */
     private final ConcurrentMap<ResolutionKey, AtomicInteger> roundRobinCounters = new ConcurrentHashMap<>();
 
     public EventDispatcher(EventBus eventBus, BeanContainer beanContainer) {
@@ -50,14 +38,6 @@ public class EventDispatcher {
         this.beanContainer = beanContainer;
     }
 
-    /**
-     * Register a consumer for the given observed type and qualifiers.
-     *
-     * @param observedType the type this consumer observes (may be parameterized)
-     * @param qualifiers qualifier annotations for routing
-     * @param address the unique Vert.x address for this consumer
-     * @return a registration handle for unregistering
-     */
     public EventConsumerRegistration registerConsumer(Type observedType, Set<Annotation> qualifiers, String address) {
         ConsumerRecord record = new ConsumerRecord(observedType, qualifiers, address);
         consumers.put(address, record);
@@ -72,44 +52,36 @@ public class EventDispatcher {
     /**
      * Publish an event to ALL matching consumers.
      */
-    public void publish(Object event, Type eventType, Collection<Annotation> qualifiers) {
-        ensureCodec(event.getClass());
-        List<ConsumerRecord> matching = resolveConsumers(eventType, qualifierSet(qualifiers));
+    public void publish(EventEnvelope envelope) {
+        List<ConsumerRecord> matching = resolveConsumers(envelope.eventType(), envelope.qualifiers());
         for (ConsumerRecord record : matching) {
-            eventBus.publish(record.address, event);
+            eventBus.publish(record.address, envelope);
         }
     }
 
     /**
      * Send an event to ONE matching consumer (round-robin).
      */
-    public void send(Object event, Type eventType, Collection<Annotation> qualifiers) {
-        ensureCodec(event.getClass());
-        ConsumerRecord selected = nextConsumer(eventType, qualifierSet(qualifiers));
+    public void send(EventEnvelope envelope) {
+        ConsumerRecord selected = nextConsumer(envelope.eventType(), envelope.qualifiers());
         if (selected != null) {
-            eventBus.send(selected.address, event);
+            eventBus.send(selected.address, envelope);
         }
     }
 
     /**
      * Send an event to ONE matching consumer and wait for a reply.
      */
-    public <R> Uni<R> request(Object event, Type eventType, Collection<Annotation> qualifiers) {
-        ensureCodec(event.getClass());
-        ConsumerRecord selected = nextConsumer(eventType, qualifierSet(qualifiers));
+    public <R> Uni<R> request(EventEnvelope envelope) {
+        ConsumerRecord selected = nextConsumer(envelope.eventType(), envelope.qualifiers());
         if (selected == null) {
             return Uni.createFrom().failure(
-                    new IllegalStateException("No consumers registered for event type: " + eventType));
+                    new IllegalStateException("No consumers registered for event type: " + envelope.eventType()));
         }
-        return eventBus.<R> request(selected.address, event)
+        return eventBus.<R> request(selected.address, envelope)
                 .onItem().transform(Message::body);
     }
 
-    /**
-     * Select the next consumer in round-robin order from matching consumers.
-     *
-     * @return the selected consumer, or {@code null} if no consumers match
-     */
     private ConsumerRecord nextConsumer(Type eventType, Set<Annotation> qualifiers) {
         ResolutionKey key = new ResolutionKey(eventType, qualifiers);
         List<ConsumerRecord> matching = resolvedConsumers.computeIfAbsent(key, this::computeMatching);
@@ -121,9 +93,6 @@ public class EventDispatcher {
         return matching.get(index);
     }
 
-    /**
-     * Resolve all consumers matching the given event type and qualifiers using CDI's isMatchingEvent.
-     */
     private List<ConsumerRecord> resolveConsumers(Type eventType, Set<Annotation> qualifiers) {
         return resolvedConsumers.computeIfAbsent(new ResolutionKey(eventType, qualifiers), this::computeMatching);
     }
@@ -139,23 +108,9 @@ public class EventDispatcher {
         return matching;
     }
 
-    /**
-     * Invalidate cached resolutions that could be affected by a consumer change.
-     */
     private void invalidateCache(ConsumerRecord record) {
         resolvedConsumers.keySet().removeIf(key -> beanContainer.isMatchingEvent(key.eventType, key.qualifiers,
                 record.observedType, record.qualifiers));
-    }
-
-    private void ensureCodec(Class<?> eventType) {
-        EventsRecorder.registerCodecForType(eventType);
-    }
-
-    private static Set<Annotation> qualifierSet(Collection<Annotation> qualifiers) {
-        if (qualifiers == null || qualifiers.isEmpty()) {
-            return Set.of();
-        }
-        return Set.copyOf(qualifiers);
     }
 
     private record ConsumerRecord(Type observedType, Set<Annotation> qualifiers, String address) {

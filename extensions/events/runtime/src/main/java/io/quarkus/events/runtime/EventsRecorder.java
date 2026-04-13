@@ -45,6 +45,9 @@ public class EventsRecorder {
                 vertx.eventBus());
         dispatcher = new EventDispatcher(mutinyEventBus, Arc.container().beanManager());
 
+        // Register codec for EventEnvelope — used by all declarative consumers
+        registerCodecForType(EventEnvelope.class);
+
         registerConsumers(consumers);
 
         shutdown.addShutdownTask(() -> {
@@ -70,7 +73,6 @@ public class EventsRecorder {
      * Register a default codec for an event type if not already registered.
      * Called by {@link EventDispatcher} at send time for on-demand codec registration.
      */
-    @SuppressWarnings("unchecked")
     static void registerCodecForType(Class<?> eventType) {
         if (vertx == null || !registeredCodecs.add(eventType)) {
             return;
@@ -96,7 +98,8 @@ public class EventsRecorder {
 
         int consumerId = 0;
         for (EventConsumerInfo info : consumers) {
-            EventsConsumerInvoker invoker = new EventsConsumerInvoker(info.getInvoker().getValue());
+            EventsConsumerInvoker invoker = new EventsConsumerInvoker(
+                    info.getInvoker().getValue(), info.getParameterCount(), info.getEventInfoPosition());
             boolean blocking = info.isBlocking();
             boolean ordered = info.isOrdered();
 

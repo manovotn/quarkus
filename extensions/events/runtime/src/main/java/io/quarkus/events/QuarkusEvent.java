@@ -87,6 +87,18 @@ public interface QuarkusEvent<T> {
     QuarkusEvent<T> select(Annotation... qualifiers);
 
     /**
+     * Attach a metadata entry to subsequent emissions from this event instance.
+     * Returns a new {@link QuarkusEvent} with the metadata added.
+     * <p>
+     * Metadata is accessible in consumers via an {@link EventInfo} parameter.
+     *
+     * @param key the metadata key
+     * @param value the metadata value
+     * @return a new {@link QuarkusEvent} with the metadata entry added
+     */
+    QuarkusEvent<T> withMetadata(String key, Object value);
+
+    /**
      * Programmatically register a consumer for events of the given type.
      * The consumer receives events of the exact type only (no subtype fan-out).
      *

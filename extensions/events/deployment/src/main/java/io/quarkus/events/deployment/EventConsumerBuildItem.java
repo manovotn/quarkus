@@ -18,14 +18,18 @@ public final class EventConsumerBuildItem extends MultiBuildItem {
     private final InvokerInfo invoker;
     private final boolean blocking;
     private final boolean ordered;
+    private final int parameterCount;
+    private final int eventInfoPosition;
 
     public EventConsumerBuildItem(Type observedType, List<AnnotationInstance> qualifiers, InvokerInfo invoker,
-            boolean blocking, boolean ordered) {
+            boolean blocking, boolean ordered, int parameterCount, int eventInfoPosition) {
         this.observedType = observedType;
         this.qualifiers = qualifiers;
         this.invoker = invoker;
         this.blocking = blocking;
         this.ordered = ordered;
+        this.parameterCount = parameterCount;
+        this.eventInfoPosition = eventInfoPosition;
     }
 
     public Type getObservedType() {
@@ -46,5 +50,13 @@ public final class EventConsumerBuildItem extends MultiBuildItem {
 
     public boolean isOrdered() {
         return ordered;
+    }
+
+    public int getParameterCount() {
+        return parameterCount;
+    }
+
+    public int getEventInfoPosition() {
+        return eventInfoPosition;
     }
 }

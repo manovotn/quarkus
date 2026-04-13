@@ -61,6 +61,7 @@ public class EventsProcessor {
     private static final DotName ON_EVENT = DotName.createSimple(OnEvent.class);
     private static final DotName UNI = DotName.createSimple(Uni.class);
     private static final DotName QUALIFIER = DotName.createSimple("jakarta.inject.Qualifier");
+    private static final DotName EVENT_INFO = DotName.createSimple(io.quarkus.events.EventInfo.class);
 
     // Types that are too broad to observe — build-time error if used
     private static final Set<DotName> FORBIDDEN_OBSERVED_TYPES = Set.of(
@@ -110,14 +111,18 @@ public class EventsProcessor {
                     continue;
                 }
 
-                // Validate: exactly one parameter
-                if (method.parametersCount() != 1) {
+                // Validate: at least one parameter
+                if (method.parametersCount() < 1) {
                     throw new IllegalStateException(String.format(
-                            "@OnEvent method must accept exactly one parameter: %s [bean: %s]",
+                            "@OnEvent method must have at least one parameter (the event): %s [bean: %s]",
                             method, bean));
                 }
 
-                // Preserve the full Jandex Type (including parameterized type info)
+                // TODO: Consider whether the event parameter should be identified by a marker
+                // annotation (like CDI's @Observes) rather than by convention (always position 0).
+                // A marker annotation would allow the event at any position and be more explicit.
+
+                // Event parameter is always at position 0
                 org.jboss.jandex.Type paramType = method.parameterType(0);
                 DotName observedTypeName = paramType.name();
 
@@ -131,10 +136,20 @@ public class EventsProcessor {
                 // Extract qualifier AnnotationInstances from the event parameter
                 List<AnnotationInstance> qualifiers = extractQualifiers(method, annotationStore, combinedIndex);
 
-                // Build invoker: transform Message<Object> param to the body
+                // Detect EventInfo parameter and CDI-injected parameters
+                int eventInfoPosition = -1;
                 InvokerBuilder builder = invokerFactory.createInvoker(bean, method)
-                        .withInstanceLookup()
-                        .withArgumentTransformer(0, io.vertx.core.eventbus.Message.class, "body");
+                        .withInstanceLookup();
+
+                for (int i = 1; i < method.parametersCount(); i++) {
+                    if (method.parameterType(i).name().equals(EVENT_INFO)) {
+                        eventInfoPosition = i;
+                        // EventInfo is provided by the invoker wrapper, not CDI lookup
+                    } else {
+                        // CDI-injected parameter
+                        builder.withArgumentLookup(i);
+                    }
+                }
 
                 if (method.returnType().name().equals(UNI)) {
                     builder.withReturnValueTransformer(Uni.class, "subscribeAsCompletionStage");
@@ -146,7 +161,8 @@ public class EventsProcessor {
                 boolean ordered = onEvent.value("ordered") != null && onEvent.value("ordered").asBoolean();
 
                 eventConsumers.produce(new EventConsumerBuildItem(
-                        paramType, qualifiers, invoker, blocking, ordered));
+                        paramType, qualifiers, invoker, blocking, ordered,
+                        method.parametersCount(), eventInfoPosition));
                 LOGGER.debugf("Found @OnEvent consumer: %s on %s (type: %s, qualifiers: %s)",
                         method, bean, paramType, qualifiers);
             }
@@ -250,7 +266,9 @@ public class EventsProcessor {
                     metadataClassName,
                     recorderContext.newInstance(consumer.getInvoker().getClassName()),
                     consumer.isBlocking(),
-                    consumer.isOrdered()));
+                    consumer.isOrdered(),
+                    consumer.getParameterCount(),
+                    consumer.getEventInfoPosition()));
         }
 
         // Register generated metadata classes for reflection
