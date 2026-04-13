@@ -2,21 +2,24 @@ package io.quarkus.events.runtime;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
+import java.util.List;
 import java.util.Set;
 
 /**
- * Provides runtime type and qualifier metadata for a consumer.
- * Implementations are generated at build time via Gizmo2.
+ * Provides runtime type and qualifier metadata for all declarative consumers.
+ * A single implementation is generated at build time via Gizmo2 containing
+ * metadata entries for every {@code @OnEvent} consumer method.
  */
 public interface ConsumerMetadata {
 
     /**
-     * @return the observed event type, preserving parameterized type info
+     * @return metadata entries for all consumers, in declaration order
      */
-    Type observedType();
+    List<Entry> entries();
 
     /**
-     * @return the qualifier annotations declared on the event parameter
+     * Metadata for a single consumer.
      */
-    Set<Annotation> qualifiers();
+    record Entry(Type observedType, Set<Annotation> qualifiers) {
+    }
 }

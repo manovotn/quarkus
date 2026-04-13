@@ -10,26 +10,19 @@ import io.quarkus.runtime.RuntimeValue;
  */
 public class EventConsumerInfo {
 
-    private final String metadataClassName;
     private final RuntimeValue<Invoker<Object, Object>> invoker;
     private final boolean blocking;
     private final boolean ordered;
     private final int parameterCount;
     private final int eventInfoPosition;
 
-    public EventConsumerInfo(String metadataClassName,
-            RuntimeValue<Invoker<Object, Object>> invoker, boolean blocking, boolean ordered,
+    public EventConsumerInfo(RuntimeValue<Invoker<Object, Object>> invoker, boolean blocking, boolean ordered,
             int parameterCount, int eventInfoPosition) {
-        this.metadataClassName = metadataClassName;
         this.invoker = invoker;
         this.blocking = blocking;
         this.ordered = ordered;
         this.parameterCount = parameterCount;
         this.eventInfoPosition = eventInfoPosition;
-    }
-
-    public String getMetadataClassName() {
-        return metadataClassName;
     }
 
     public RuntimeValue<Invoker<Object, Object>> getInvoker() {

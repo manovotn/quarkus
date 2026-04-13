@@ -37,7 +37,7 @@ public class EventsRecorder {
     private static final Set<Class<?>> registeredCodecs = ConcurrentHashMap.newKeySet();
 
     public void init(Supplier<Vertx> vertxSupplier, List<EventConsumerInfo> consumers,
-            ShutdownContext shutdown) {
+            String metadataClassName, ShutdownContext shutdown) {
         vertx = vertxSupplier.get();
         messageConsumers = new CopyOnWriteArrayList<>();
 
@@ -48,7 +48,9 @@ public class EventsRecorder {
         // Register codec for EventEnvelope — used by all declarative consumers
         registerCodecForType(EventEnvelope.class);
 
-        registerConsumers(consumers);
+        if (metadataClassName != null) {
+            registerConsumers(consumers, metadataClassName);
+        }
 
         shutdown.addShutdownTask(() -> {
             if (messageConsumers != null) {
@@ -85,9 +87,20 @@ public class EventsRecorder {
         }
     }
 
-    private void registerConsumers(List<EventConsumerInfo> consumers) {
+    private void registerConsumers(List<EventConsumerInfo> consumers, String metadataClassName) {
         if (consumers.isEmpty()) {
             return;
+        }
+
+        // Load the single generated metadata registry class
+        List<ConsumerMetadata.Entry> metadataEntries;
+        try {
+            ClassLoader tccl = Thread.currentThread().getContextClassLoader();
+            ConsumerMetadata metadata = (ConsumerMetadata) tccl.loadClass(metadataClassName)
+                    .getConstructor().newInstance();
+            metadataEntries = metadata.entries();
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to load consumer metadata: " + metadataClassName, e);
         }
 
         EventBus eventBus = vertx.eventBus();
@@ -104,17 +117,13 @@ public class EventsRecorder {
             boolean ordered = info.isOrdered();
 
             // Each consumer gets a unique address
-            String address = "__qx_event__/consumer/" + consumerId++;
+            String address = "__qx_event__/consumer/" + consumerId;
 
-            // Load the generated metadata class to get Type and Annotation objects
-            try {
-                ClassLoader tccl = Thread.currentThread().getContextClassLoader();
-                ConsumerMetadata metadata = (ConsumerMetadata) tccl.loadClass(info.getMetadataClassName())
-                        .getConstructor().newInstance();
-                dispatcher.registerConsumer(metadata.observedType(), metadata.qualifiers(), address);
-            } catch (Exception e) {
-                LOGGER.errorf(e, "Unable to load consumer metadata: %s", info.getMetadataClassName());
-            }
+            // Register in the dispatcher with type/qualifier metadata from the generated registry
+            ConsumerMetadata.Entry entry = metadataEntries.get(consumerId);
+            dispatcher.registerConsumer(entry.observedType(), entry.qualifiers(), address);
+
+            consumerId++;
 
             // Register a Vert.x consumer on the unique address
             ContextInternal context = vi.createEventLoopContext();

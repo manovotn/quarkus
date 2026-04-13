@@ -1,15 +1,14 @@
 package io.quarkus.events.deployment;
 
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.MethodInfo;
+import org.jboss.jandex.Type;
 import org.jboss.logging.Logger;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
@@ -48,7 +47,6 @@ import io.quarkus.gizmo2.Expr;
 import io.quarkus.gizmo2.Gizmo;
 import io.quarkus.gizmo2.LocalVar;
 import io.quarkus.gizmo2.desc.ConstructorDesc;
-import io.quarkus.gizmo2.desc.FieldDesc;
 import io.quarkus.gizmo2.desc.MethodDesc;
 import io.quarkus.runtime.util.HashUtil;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
@@ -123,7 +121,7 @@ public class EventsProcessor {
                 // A marker annotation would allow the event at any position and be more explicit.
 
                 // Event parameter is always at position 0
-                org.jboss.jandex.Type paramType = method.parameterType(0);
+                Type paramType = method.parameterType(0);
                 DotName observedTypeName = paramType.name();
 
                 // Validate: no overly broad types
@@ -184,101 +182,79 @@ public class EventsProcessor {
             BuildProducer<GeneratedResourceBuildItem> generatedResources,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClasses) {
 
-        ClassOutput classOutput = new GeneratedClassGizmo2Adaptor(generatedClasses, generatedResources,
-                new Function<String, String>() {
-                    @Override
-                    public String apply(String generatedClassName) {
-                        // Map generated class to the declaring class for class loading
-                        return generatedClassName.substring(0, generatedClassName.indexOf("_EventMeta_"));
-                    }
-                });
-        Gizmo gizmo = Gizmo.create(classOutput)
-                .withDebugInfo(false)
-                .withParameters(false);
-
         List<EventConsumerInfo> consumerInfos = new ArrayList<>();
-        List<String> metadataClassNames = new ArrayList<>();
+        String metadataClassName = null;
 
-        for (EventConsumerBuildItem consumer : eventConsumers) {
-            // Generate a unique metadata class name
-            String metadataClassName = consumer.getObservedType().name().toString()
-                    + "_EventMeta_"
-                    + HashUtil.sha256(consumer.getObservedType().toString()
-                            + consumer.getQualifiers().stream().map(Object::toString).collect(Collectors.joining(",")));
+        if (!eventConsumers.isEmpty()) {
+            // Generate a single metadata registry class for all consumers
+            metadataClassName = "io.quarkus.events.runtime.GeneratedConsumerMetadata_"
+                    + HashUtil.sha256(eventConsumers.stream()
+                            .map(c -> c.getObservedType().toString() + c.getQualifiers().toString())
+                            .collect(Collectors.joining(",")));
+
+            ClassOutput classOutput = new GeneratedClassGizmo2Adaptor(generatedClasses, generatedResources, true);
+            Gizmo gizmo = Gizmo.create(classOutput)
+                    .withDebugInfo(false)
+                    .withParameters(false);
 
             gizmo.class_(metadataClassName, cc -> {
                 cc.implements_(ConsumerMetadata.class);
 
-                FieldDesc observedTypeField = cc.field("observedType", fc -> {
-                    fc.private_();
-                    fc.final_();
-                    fc.setType(Type.class);
-                });
-                FieldDesc qualifiersField = cc.field("qualifiers", fc -> {
-                    fc.private_();
-                    fc.final_();
-                    fc.setType(Set.class);
-                });
-
                 cc.constructor(con -> {
                     con.body(bc -> {
                         bc.invokeSpecial(ConstructorDesc.of(Object.class), cc.this_());
-
-                        LocalVar tccl = bc.localVar("tccl", bc.invokeVirtual(
-                                MethodDesc.of(Thread.class, "getContextClassLoader", ClassLoader.class),
-                                bc.currentThread()));
-
-                        // Create the observed Type
-                        RuntimeTypeCreator rttc = RuntimeTypeCreator.of(bc).withTCCL(tccl);
-                        bc.set(cc.this_().field(observedTypeField), rttc.create(consumer.getObservedType()));
-
-                        // Create the qualifier Set<Annotation>
-                        if (consumer.getQualifiers().isEmpty()) {
-                            bc.set(cc.this_().field(qualifiersField),
-                                    bc.invokeStatic(MethodDesc.of(Set.class, "of", Set.class)));
-                        } else {
-                            Expr qualifiersSet = bc.setOf(consumer.getQualifiers(),
-                                    qualifier -> beanRegistration.getBeanProcessor().getAnnotationLiteralProcessor()
-                                            .create(bc,
-                                                    beanArchiveIndex.getIndex().getClassByName(qualifier.name()),
-                                                    qualifier));
-                            bc.set(cc.this_().field(qualifiersField), qualifiersSet);
-                        }
-
                         bc.return_();
                     });
                 });
 
-                cc.method("observedType", mc -> {
-                    mc.returning(Type.class);
-                    mc.body(bc -> bc.return_(cc.this_().field(observedTypeField)));
-                });
+                cc.method("entries", mc -> {
+                    mc.returning(List.class);
+                    mc.body(bc -> {
+                        LocalVar tccl = bc.localVar("tccl", bc.invokeVirtual(
+                                MethodDesc.of(Thread.class, "getContextClassLoader", ClassLoader.class),
+                                bc.currentThread()));
+                        RuntimeTypeCreator rttc = RuntimeTypeCreator.of(bc).withTCCL(tccl);
 
-                cc.method("qualifiers", mc -> {
-                    mc.returning(Set.class);
-                    mc.body(bc -> bc.return_(cc.this_().field(qualifiersField)));
+                        // Build a List.of(...) with one Entry per consumer
+                        Expr list = bc.listOf(eventConsumers, consumer -> {
+                            // Create the observed Type
+                            Expr observedType = rttc.create(consumer.getObservedType());
+
+                            // Create the qualifier Set<Annotation>
+                            Expr qualifiers;
+                            if (consumer.getQualifiers().isEmpty()) {
+                                qualifiers = bc.invokeStatic(MethodDesc.of(Set.class, "of", Set.class));
+                            } else {
+                                qualifiers = bc.setOf(consumer.getQualifiers(),
+                                        qualifier -> beanRegistration.getBeanProcessor().getAnnotationLiteralProcessor()
+                                                .create(bc,
+                                                        beanArchiveIndex.getIndex().getClassByName(qualifier.name()),
+                                                        qualifier));
+                            }
+
+                            return bc.new_(ConsumerMetadata.Entry.class, observedType, qualifiers);
+                        });
+
+                        bc.return_(list);
+                    });
                 });
             });
 
-            metadataClassNames.add(metadataClassName);
-
-            consumerInfos.add(new EventConsumerInfo(
-                    metadataClassName,
-                    recorderContext.newInstance(consumer.getInvoker().getClassName()),
-                    consumer.isBlocking(),
-                    consumer.isOrdered(),
-                    consumer.getParameterCount(),
-                    consumer.getEventInfoPosition()));
-        }
-
-        // Register generated metadata classes for reflection
-        if (!metadataClassNames.isEmpty()) {
-            reflectiveClasses.produce(ReflectiveClassBuildItem.builder(metadataClassNames)
+            reflectiveClasses.produce(ReflectiveClassBuildItem.builder(metadataClassName)
                     .publicConstructors()
                     .build());
+
+            for (EventConsumerBuildItem consumer : eventConsumers) {
+                consumerInfos.add(new EventConsumerInfo(
+                        recorderContext.newInstance(consumer.getInvoker().getClassName()),
+                        consumer.isBlocking(),
+                        consumer.isOrdered(),
+                        consumer.getParameterCount(),
+                        consumer.getEventInfoPosition()));
+            }
         }
 
-        recorder.init(vertx.getVertx(), consumerInfos, shutdown);
+        recorder.init(vertx.getVertx(), consumerInfos, metadataClassName, shutdown);
     }
 
     @BuildStep
