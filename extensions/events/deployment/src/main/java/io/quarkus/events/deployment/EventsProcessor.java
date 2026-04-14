@@ -1,26 +1,35 @@
 package io.quarkus.events.deployment;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.inject.spi.InjectionPoint;
+
 import org.jboss.jandex.AnnotationInstance;
+import org.jboss.jandex.ClassType;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.MethodInfo;
+import org.jboss.jandex.ParameterizedType;
 import org.jboss.jandex.Type;
+import org.jboss.jandex.TypeVariable;
 import org.jboss.logging.Logger;
 
-import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.AutoAddScopeBuildItem;
 import io.quarkus.arc.deployment.BeanArchiveIndexBuildItem;
 import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem;
 import io.quarkus.arc.deployment.InvokerFactoryBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem.ExtendedBeanConfigurator;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.AnnotationStore;
 import io.quarkus.arc.processor.BeanInfo;
 import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.BuiltinScope;
+import io.quarkus.arc.processor.InjectionPointInfo;
 import io.quarkus.arc.processor.InvokerBuilder;
 import io.quarkus.arc.processor.InvokerInfo;
 import io.quarkus.arc.processor.RuntimeTypeCreator;
@@ -39,9 +48,11 @@ import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.events.OnEvent;
+import io.quarkus.events.QuarkusEvent;
 import io.quarkus.events.runtime.ConsumerMetadata;
 import io.quarkus.events.runtime.EventConsumerInfo;
 import io.quarkus.events.runtime.EventsRecorder;
+import io.quarkus.events.runtime.QuarkusEventBeanCreator;
 import io.quarkus.gizmo2.ClassOutput;
 import io.quarkus.gizmo2.Const;
 import io.quarkus.gizmo2.Expr;
@@ -58,6 +69,7 @@ public class EventsProcessor {
     private static final Logger LOGGER = Logger.getLogger(EventsProcessor.class);
 
     private static final DotName ON_EVENT = DotName.createSimple(OnEvent.class);
+    private static final DotName QUARKUS_EVENT = DotName.createSimple(io.quarkus.events.QuarkusEvent.class);
     private static final DotName UNI = DotName.createSimple(Uni.class);
     private static final DotName QUALIFIER = DotName.createSimple("jakarta.inject.Qualifier");
     private static final DotName EVENT_INFO = DotName.createSimple(io.quarkus.events.EventInfo.class);
@@ -189,7 +201,8 @@ public class EventsProcessor {
             RecorderContext recorderContext,
             BuildProducer<GeneratedClassBuildItem> generatedClasses,
             BuildProducer<GeneratedResourceBuildItem> generatedResources,
-            BuildProducer<ReflectiveClassBuildItem> reflectiveClasses) {
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClasses,
+            BuildProducer<SyntheticBeanBuildItem> syntheticBeans) {
 
         List<EventConsumerInfo> consumerInfos = new ArrayList<>();
         String metadataClassName = null;
@@ -271,12 +284,31 @@ public class EventsProcessor {
         }
 
         recorder.init(vertx.getVertx(), consumerInfos, metadataClassName, shutdown);
-    }
 
-    @BuildStep
-    AdditionalBeanBuildItem registerQuarkusEventProducer() {
-        return AdditionalBeanBuildItem.unremovableOf(
-                io.quarkus.events.runtime.QuarkusEventProducer.class);
+        // Register synthetic bean for QuarkusEvent<T> with all discovered qualifiers
+        Set<AnnotationInstance> allQualifiers = new HashSet<>();
+        for (EventConsumerBuildItem consumer : eventConsumers) {
+            allQualifiers.addAll(consumer.getQualifiers());
+        }
+        for (InjectionPointInfo ip : beanRegistration.getInjectionPoints()) {
+            if (ip.getType().name().equals(QUARKUS_EVENT)) {
+                allQualifiers.addAll(ip.getRequiredQualifiers());
+            }
+        }
+
+        ExtendedBeanConfigurator configurator = SyntheticBeanBuildItem
+                .configure(QuarkusEvent.class)
+                .addType(ParameterizedType.builder(QUARKUS_EVENT)
+                        .addArgument(TypeVariable.create("T")).build())
+                .scope(Dependent.class)
+                .addInjectionPoint(ClassType.create(DotName.createSimple(InjectionPoint.class)));
+        for (AnnotationInstance q : allQualifiers) {
+            configurator.addQualifier(q);
+        }
+        syntheticBeans.produce(configurator
+                .creator(QuarkusEventBeanCreator.class)
+                .forceApplicationClass()
+                .done());
     }
 
     /**
