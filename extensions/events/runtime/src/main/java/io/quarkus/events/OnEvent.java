@@ -36,17 +36,12 @@ import java.lang.annotation.Target;
 @Retention(RUNTIME)
 public @interface OnEvent {
 
-    // TODO: blocking and ordered are carried over from the original Vert.x @ConsumeEvent design.
-    // Add test coverage if we want to keep these, or reconsider whether they belong in the new API.
+    // TODO: blocking() is carried over from the original Vert.x @ConsumeEvent design.
+    // It should be replaced with return type analysis and @Blocking/@NonBlocking annotations,
+    // consistent with other Quarkus extensions. Also add @RunOnVirtualThread support.
 
     /**
      * If {@code true}, the consumer is invoked as a blocking operation using a worker thread.
      */
     boolean blocking() default false;
-
-    /**
-     * If {@code true}, blocking invocations are serialized (not called concurrently).
-     * Must be used in conjunction with {@code blocking=true}.
-     */
-    boolean ordered() default false;
 }

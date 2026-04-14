@@ -166,10 +166,9 @@ public class EventsProcessor {
                 InvokerInfo invoker = builder.build();
 
                 boolean blocking = onEvent.value("blocking") != null && onEvent.value("blocking").asBoolean();
-                boolean ordered = onEvent.value("ordered") != null && onEvent.value("ordered").asBoolean();
 
                 eventConsumers.produce(new EventConsumerBuildItem(
-                        paramType, responseType, qualifiers, invoker, blocking, ordered,
+                        paramType, responseType, qualifiers, invoker, blocking,
                         method.parametersCount(), eventInfoPosition));
                 LOGGER.debugf("Found @OnEvent consumer: %s on %s (type: %s, qualifiers: %s)",
                         method, bean, paramType, qualifiers);
@@ -266,7 +265,6 @@ public class EventsProcessor {
                 consumerInfos.add(new EventConsumerInfo(
                         recorderContext.newInstance(consumer.getInvoker().getClassName()),
                         consumer.isBlocking(),
-                        consumer.isOrdered(),
                         consumer.getParameterCount(),
                         consumer.getEventInfoPosition()));
             }

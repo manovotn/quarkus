@@ -99,8 +99,10 @@ public interface QuarkusEvent<T> {
     QuarkusEvent<T> withMetadata(String key, Object value);
 
     /**
-     * Programmatically register a consumer for events of the given type.
-     * The consumer receives events of the exact type only (no subtype fan-out).
+     * Programmatically register a fire-and-forget consumer for events of the given type.
+     * The consumer receives events of the specified type and all subtypes, following the
+     * same matching rules as {@code @OnEvent} consumers. Qualifiers from this
+     * {@link QuarkusEvent} instance are applied to the consumer.
      *
      * @param eventType the event type to consume
      * @param handler the event handler

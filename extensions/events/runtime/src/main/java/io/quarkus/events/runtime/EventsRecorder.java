@@ -114,7 +114,6 @@ public class EventsRecorder {
             EventsConsumerInvoker invoker = new EventsConsumerInvoker(
                     info.getInvoker().getValue(), info.getParameterCount(), info.getEventInfoPosition());
             boolean blocking = info.isBlocking();
-            boolean ordered = info.isOrdered();
 
             // Each consumer gets a unique address
             String address = "__qx_event__/consumer/" + consumerId;
@@ -151,7 +150,7 @@ public class EventsRecorder {
                                                 }
                                                 return null;
                                             }
-                                        }, ordered);
+                                        }, false);
                                 future.onFailure(context::reportException);
                             } else {
                                 try {
