@@ -2,6 +2,7 @@ package io.quarkus.events;
 
 import java.lang.annotation.Annotation;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import io.smallrye.mutiny.Uni;
 
@@ -109,4 +110,33 @@ public interface QuarkusEvent<T> {
      * @return a registration handle that can be used to unregister the consumer
      */
     EventConsumerRegistration consumer(Class<T> eventType, Consumer<T> handler);
+
+    /**
+     * Programmatically register a request-reply consumer with a synchronous handler.
+     * The handler's return value is sent back as the reply.
+     * <p>
+     * A synchronous handler implies a blocking execution model.
+     *
+     * @param <R> the reply type
+     * @param eventType the event type to consume
+     * @param handler the event handler that produces a reply
+     * @param responseType the reply type (used for response type matching in {@code request()})
+     * @return a registration handle that can be used to unregister the consumer
+     */
+    <R> EventConsumerRegistration replyingConsumer(Class<T> eventType, Function<T, R> handler, Class<R> responseType);
+
+    /**
+     * Programmatically register a request-reply consumer with an asynchronous handler.
+     * The handler returns a {@link Uni} whose result is sent back as the reply.
+     * <p>
+     * An asynchronous handler implies a non-blocking execution model.
+     *
+     * @param <R> the reply type
+     * @param eventType the event type to consume
+     * @param handler the event handler that produces a reply asynchronously
+     * @param responseType the reply type (used for response type matching in {@code request()})
+     * @return a registration handle that can be used to unregister the consumer
+     */
+    <R> EventConsumerRegistration replyingConsumerAsync(Class<T> eventType, Function<T, Uni<R>> handler,
+            Class<R> responseType);
 }

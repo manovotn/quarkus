@@ -8,10 +8,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
+import io.quarkus.arc.Arc;
 import io.quarkus.events.EventConsumerRegistration;
 import io.quarkus.events.QuarkusEvent;
 import io.smallrye.mutiny.Uni;
+import io.vertx.mutiny.core.eventbus.EventBus;
+import io.vertx.mutiny.core.eventbus.MessageConsumer;
 
 /**
  * Runtime implementation of {@link QuarkusEvent}.
@@ -80,9 +84,8 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
 
         // Register a Vert.x consumer on the unique address
         // (EventEnvelope codec is already registered at init time)
-        io.vertx.mutiny.core.eventbus.EventBus eventBus = io.quarkus.arc.Arc.container()
-                .instance(io.vertx.mutiny.core.eventbus.EventBus.class).get();
-        io.vertx.mutiny.core.eventbus.MessageConsumer<Object> vertxConsumer = eventBus.localConsumer(address);
+        EventBus eventBus = Arc.container().instance(EventBus.class).get();
+        MessageConsumer<Object> vertxConsumer = eventBus.localConsumer(address);
         vertxConsumer.handler(message -> {
             @SuppressWarnings("unchecked")
             T event = (T) ((EventEnvelope) message.body()).event();
@@ -91,6 +94,53 @@ public class QuarkusEventImpl<T> implements QuarkusEvent<T> {
 
         // Register in the dispatcher for type-based routing
         EventConsumerRegistration dispatcherReg = dispatcher().registerConsumer(eventType, this.qualifiers, address);
+
+        return () -> {
+            vertxConsumer.unregister();
+            return dispatcherReg.unregister();
+        };
+    }
+
+    @Override
+    public <R> EventConsumerRegistration replyingConsumer(Class<T> eventType, Function<T, R> handler,
+            Class<R> responseType) {
+        String address = "__qx_event__/programmatic/" + CONSUMER_ID.getAndIncrement();
+
+        EventBus eventBus = Arc.container().instance(EventBus.class).get();
+        MessageConsumer<Object> vertxConsumer = eventBus.localConsumer(address);
+        vertxConsumer.handler(message -> {
+            @SuppressWarnings("unchecked")
+            T event = (T) ((EventEnvelope) message.body()).event();
+            R result = handler.apply(event);
+            message.reply(result);
+        });
+
+        EventConsumerRegistration dispatcherReg = dispatcher().registerConsumer(eventType, this.qualifiers,
+                responseType, address);
+
+        return () -> {
+            vertxConsumer.unregister();
+            return dispatcherReg.unregister();
+        };
+    }
+
+    @Override
+    public <R> EventConsumerRegistration replyingConsumerAsync(Class<T> eventType, Function<T, Uni<R>> handler,
+            Class<R> responseType) {
+        String address = "__qx_event__/programmatic/" + CONSUMER_ID.getAndIncrement();
+
+        EventBus eventBus = Arc.container().instance(EventBus.class).get();
+        MessageConsumer<Object> vertxConsumer = eventBus.localConsumer(address);
+        vertxConsumer.handler(message -> {
+            @SuppressWarnings("unchecked")
+            T event = (T) ((EventEnvelope) message.body()).event();
+            handler.apply(event).subscribe().with(
+                    result -> message.reply(result),
+                    failure -> message.fail(500, failure.getMessage()));
+        });
+
+        EventConsumerRegistration dispatcherReg = dispatcher().registerConsumer(eventType, this.qualifiers,
+                responseType, address);
 
         return () -> {
             vertxConsumer.unregister();
