@@ -22,35 +22,20 @@ Design a new Quarkus-native event API that:
 
 ### 2.1 Address Scheme
 
-Every Java type maps to a deterministic Vert.x string address:
+Vert.x addresses are **opaque consumer identifiers**, not type-derived. Each consumer gets a unique address:
 
-```
-__qx_event__/<canonical-type-name>
-```
-
-Examples:
-| Java Type | Vert.x Address |
+| Consumer kind | Address pattern |
 |---|---|
-| `com.example.Order` | `__qx_event__/com.example.Order` |
-| `com.example.Envelope<com.example.Order>` | `__qx_event__/com.example.Envelope<com.example.Order>` |
-| `com.example.Envelope<? extends com.example.DomainEvent>` | Not valid as a send target (see §4) |
+| Declarative (`@OnEvent`) | `__qx_event__/consumer/<sequential-id>` |
+| Programmatic (`consumer()`) | `__qx_event__/programmatic/<sequential-id>` |
 
-### 2.2 Why not hashed addresses?
-
-- **Readability wins over obscurity.** Hashed addresses are opaque in logs, debuggers, and Vert.x's own metrics. When diagnosing delivery issues, seeing `__qx_event__/com.example.Order` is invaluable.
-- **No real security benefit.** This is a local, in-process bus. Anyone who can inject code into the process can also read class names. We're protecting against *accidental collision*, not adversarial access.
-- **The `__qx_event__/` prefix is sufficient** to prevent collisions with user-chosen Vert.x addresses. No reasonable user would manually register consumers on an address starting with `__qx_event__/`.
+Type-based routing is handled by the `EventDispatcher`, not by Vert.x address matching. The `__qx_event__/` prefix prevents collisions with user-chosen Vert.x addresses.
 
 ### 2.3 Address Resolution at Send Time
 
-When sending an event, the address is **always derived from `event.getClass()`** — the runtime type, not the declared generic type. This matches CDI behavior (see `EventImpl.fire()` line 81 in ArC: `getNotifier(event.getClass())`).
+Vert.x addresses are opaque consumer identifiers (`__qx_event__/consumer/0`, `__qx_event__/programmatic/1`). Type-based routing is handled by the `EventDispatcher` using CDI's `BeanContainer.isMatchingEvent()`.
 
-```java
-Animal animal = new Dog();
-eventBus.send(animal);  // → address: __qx_event__/com.example.Dog (not Animal)
-```
-
-This is critical for subtype matching to work correctly.
+The event type used for matching comes from the `QuarkusEvent<T>` injection point (preserving parameterized type info), not from `event.getClass()` — this is what enables `Envelope<Order>` vs `Envelope<Payment>` discrimination despite type erasure.
 
 ---
 
@@ -80,9 +65,9 @@ for (InjectableObserverMethod<?> observer : observers) {
 Each consumer registers on a **single unique Vert.x address** (e.g., `__qx_event__/consumer/0`). A central `EventDispatcher` maintains a registry of consumers keyed by their observed type + qualifiers.
 
 At **send time**, the dispatcher:
-1. Computes the **type closure** of `event.getClass()` by walking up via `Class.getSuperclass()` / `Class.getInterfaces()` — works in native mode
-2. Finds all consumers whose observed type appears in that closure (with matching qualifiers)
-3. Applies delivery semantics: publish → all matching, send → round-robin one, request → one with reply
+1. Iterates all registered consumers and calls `BeanContainer.isMatchingEvent()` for type + qualifier matching (results are cached)
+2. For `request()`, additionally filters by response type assignability — only consumers whose return type is assignable to the requested type are candidates
+3. Applies delivery semantics: publish → all matching, send → round-robin one, request → round-robin one (response-type-filtered) with reply
 
 #### Example
 
@@ -114,10 +99,10 @@ Sending `new OrderCancelled()`:
 
 ### 3.3 Advantages of This Approach
 
-- **Full subtype matching for both declarative and programmatic consumers** — type resolution happens at send time via class hierarchy walking, not build-time index scanning
-- **Works in native mode** — `Class.getSuperclass()` and `Class.getInterfaces()` are always available
+- **Full subtype matching for both declarative and programmatic consumers** — uses CDI's `isMatchingEvent()` which handles class hierarchy, parameterized types, and qualifier member values
 - **No fan-out explosion** — each consumer registers exactly once, regardless of how many subtypes exist
 - **Vert.x still handles async delivery** — the dispatcher routes to the right address, Vert.x delivers the message on the appropriate event loop context
+- **Resolution caching** — matching results are cached and invalidated on consumer registration/unregistration
 
 ### 3.4 Limitations
 
@@ -130,59 +115,31 @@ Sending `new OrderCancelled()`:
 
 ## 4. Parameterized Type Handling
 
-### 4.1 The Problem
+### 4.1 Implementation
+
+Parameterized type matching is fully implemented via CDI's `BeanContainer.isMatchingEvent()`:
 
 ```java
 @OnEvent void onOrderEnvelope(Envelope<Order> e) { ... }
 @OnEvent void onStringEnvelope(Envelope<String> e) { ... }
 
-eventBus.send(new Envelope<>(new Order()));  // should only reach onOrderEnvelope
+quarkusEvent.publish(new Envelope<>(new Order()));  // only reaches onOrderEnvelope
 ```
 
-These are different types and must map to different addresses:
-- `__qx_event__/com.example.Envelope<com.example.Order>`
-- `__qx_event__/com.example.Envelope<java.lang.String>`
+**How it works:**
+1. At build time, the full Jandex `Type` (including type arguments) is captured from the `@OnEvent` parameter
+2. A Gizmo2-generated metadata class uses `RuntimeTypeCreator` to produce `java.lang.reflect.ParameterizedType` objects at runtime
+3. On the sender side, `QuarkusEvent<Envelope<Order>>` captures the full parameterized type from the injection point
+4. At send time, `isMatchingEvent` compares the parameterized types correctly
 
-### 4.2 Build-Time Type Resolution
+### 4.2 Matching Rules
 
-ArC's processor already handles parameterized type analysis via Jandex's `Type` model. The `Types` utility class in `io.quarkus.arc.processor` provides:
-- `Types.getTypeClosure()` — computes the full type closure including parameterized supertypes
-- Type variable resolution through `TypeResolver`
-- Assignability checks
+CDI's matching rules apply (via `isMatchingEvent`):
 
-For the event bus processor, we need similar logic:
-1. Extract the observed type from the `@OnEvent` method parameter (including generic parameters)
-2. When the parameter is `Envelope<Order>`, the canonical address includes the full parameterized form
-3. For subtype matching: `Envelope<Order>` should match a consumer of `Envelope<? extends DomainEvent>` if `Order extends DomainEvent`
-
-### 4.3 Subtype Matching with Generics
-
-CDI's `EventTypeAssignabilityRules` defines precise matching for parameterized types:
-
-- `Envelope<Order>` matches observer `Envelope<Order>` ✓ (exact match)
-- `Envelope<Order>` matches observer `Envelope<? extends DomainEvent>` ✓ (wildcard bound)
-- `Envelope<Order>` does **not** match observer `Envelope<String>` ✗
-- `Envelope<Order>` matches observer `Envelope` (raw type) ✓
-
-**Build-time implementation:** The processor must replicate `EventTypeAssignabilityRules` logic using Jandex types (not `java.lang.reflect.Type`). ArC's processor already has infrastructure for this in its observer resolution code.
-
-### 4.4 Wildcards and Type Variables as Observed Types
-
-Consumers can declare wildcard bounds:
-```java
-@OnEvent void handle(Envelope<? extends DomainEvent> e) { ... }
-```
-
-At build time, we find all concrete `Envelope<X>` types where `X extends DomainEvent` in the application, and register the consumer on each of those addresses.
-
-**Problem:** What if the application sends `Envelope<Order>` but `Order` was never used as a concrete type argument in any class or field declaration visible to Jandex?
-
-**Mitigation options:**
-1. **Require event types to be discoverable** — document that event types used with generics must appear as concrete type arguments somewhere in the codebase (bean fields, method parameters, etc.)
-2. **Runtime fallback** — register a catch-all consumer on the raw type address (`__qx_event__/com.example.Envelope`) that does runtime type checking; this is slower but handles dynamic cases
-3. **Build-time annotation** — allow `@EventType(Envelope.class, typeArguments = {Order.class})` to declare types explicitly
-
-**Recommendation:** Option 1 for the common case, with Option 3 as an escape hatch. The event types that will be sent must be declared somewhere that Jandex can see them.
+- `Envelope<Order>` matches consumer `Envelope<Order>` ✓ (exact match)
+- `Envelope<Order>` matches consumer `Envelope<? extends DomainEvent>` ✓ (wildcard bound)
+- `Envelope<Order>` does **not** match consumer `Envelope<String>` ✗
+- `Envelope<Order>` matches consumer `Envelope` (raw type) ✓
 
 ---
 
@@ -262,9 +219,10 @@ orderEvent.send(new Order(...));                               // only unqualifi
 
 **Dispatcher registry key:** The dispatcher keys consumers by observed type + qualifier names. Qualifier names are sorted lexicographically to ensure deterministic matching regardless of declaration order.
 
-**Matching rules** (following CDI conventions):
-- A consumer with no qualifiers only receives events sent without qualifiers
-- A consumer with qualifiers only receives events sent with matching qualifiers
+**Matching rules** (following CDI conventions, via `BeanContainer.isMatchingEvent()`):
+- A consumer with no qualifiers matches ALL events of matching type (CDI catch-all behavior)
+- A consumer with qualifiers only matches events sent with a superset of those qualifiers
+- Qualifier member values are compared (except `@Nonbinding` members)
 - Subtype matching applies independently of qualifiers — a `@Premium DomainEvent` consumer receives `@Premium Order` events if `Order extends DomainEvent`
 
 ---
@@ -276,22 +234,30 @@ orderEvent.send(new Order(...));                               // only unqualifi
 ```java
 @Inject QuarkusEvent<Animal> animalEvent;
 
-// Register a consumer — receives Animal and all subtypes (Dog, Cat, etc.)
+// Fire-and-forget consumer — receives Animal and all subtypes (Dog, Cat, etc.)
 EventConsumerRegistration reg = animalEvent.consumer(Animal.class, animal -> {
     // handle animal
 });
+
+// Sync request-reply consumer (implies blocking execution)
+EventConsumerRegistration reg2 = animalEvent.replyingConsumer(Animal.class,
+    animal -> "processed:" + animal.name(), String.class);
+
+// Async request-reply consumer (implies non-blocking execution)
+EventConsumerRegistration reg3 = animalEvent.replyingConsumerAsync(Animal.class,
+    animal -> Uni.createFrom().item("async:" + animal.name()), String.class);
 
 // Unregister
 reg.unregister();
 ```
 
-The `Class<T>` parameter is required because Java type erasure prevents determining the event type from the generic parameter at runtime.
+The `Class<T>` parameter is required because Java type erasure prevents determining the event type from the generic parameter at runtime. The `Class<R>` response type parameter enables response type filtering in `request()`.
 
 ### 6.2 Subtype Matching for Programmatic Consumers
 
 With the central dispatcher approach, programmatic consumers get **full subtype matching** — the same behavior as declarative `@OnEvent` consumers. The dispatcher resolves matching consumers at send time by walking up the event's type hierarchy, so a consumer registered for `Animal` will receive `Dog` events.
 
-This works because the dispatcher walks **up** from the event's runtime type (via `Class.getSuperclass()` / `Class.getInterfaces()`), not **down** from the consumer's observed type. No classpath scanning or build-time index is needed.
+This works because `isMatchingEvent()` handles type hierarchy matching — the dispatcher doesn't need to walk the class hierarchy manually. No classpath scanning or build-time index is needed.
 
 ---
 
@@ -322,17 +288,22 @@ Quarkus already has infrastructure for this in `SmallRyeContextPropagation` and 
 
 ### 7.3 Blocking / Virtual Thread Support
 
-Same as current `@ConsumeEvent`:
+> **TODO:** The current `@OnEvent(blocking = true)` should be replaced with return type analysis
+> and `@Blocking`/`@NonBlocking` annotations, consistent with other Quarkus extensions.
+> Also add `@RunOnVirtualThread` support. The `ordered` flag has been removed as it was
+> a Vert.x EventBus implementation detail.
+
 ```java
-@OnEvent(blocking = true)
-void handleBlocking(OrderCreated e) { ... }
+@OnEvent
+void handleBlocking(OrderCreated e) { ... }  // void → inferred as blocking
+
+@OnEvent
+Uni<Void> handleNonBlocking(OrderCreated e) { ... }  // Uni → inferred as non-blocking
 
 @OnEvent
 @RunOnVirtualThread
-void handleVirtualThread(OrderCreated e) { ... }
+void handleVirtualThread(OrderCreated e) { ... }  // explicit virtual thread
 ```
-
-The `VertxEventBusConsumerRecorder.registerMessageConsumers()` already handles these modes — we replicate that logic.
 
 ---
 
@@ -345,10 +316,12 @@ The `EventsProcessor` (deployment module) performs:
 1. **Scan** — iterate over CDI beans with `@OnEvent` methods via `BeanRegistrationPhaseBuildItem` and `AnnotationStore`
 2. **Extract** — observed type from method parameter, qualifier annotations from parameter annotations
 3. **Validate** — error if observed type is `Object`, `Serializable`, or similar overly broad types; error if method has wrong parameter count
-4. **Generate invokers** — create ArC invokers with argument transformers (`Message.body()`) and return value transformers (`Uni.subscribeAsCompletionStage()`)
-5. **Produce build items** — `EventConsumerBuildItem` records consumed by the runtime recorder
+4. **Generate invokers** — create ArC invokers with `withArgumentLookup()` for CDI-injected parameters and return value transformer for `Uni` → `CompletionStage`
+5. **Generate metadata class** — a single Gizmo2 class containing `Type`, `Set<Annotation>`, and response `Type` for all consumers via `RuntimeTypeCreator` and `AnnotationLiteralProcessor`
+6. **Produce build items** — `EventConsumerBuildItem` records consumed by the runtime recorder
+7. **Register synthetic bean** — `QuarkusEvent<T>` as a `@Dependent` synthetic bean with all discovered qualifiers
 
-At runtime, the recorder creates the `EventDispatcher`, registers each consumer in it (keyed by observed type + qualifiers), and sets up Vert.x consumers on unique addresses. Codecs are registered on-demand at send time.
+At runtime, the recorder creates the `EventDispatcher` (with `BeanContainer` for `isMatchingEvent`), instantiates the generated metadata class, registers each consumer in the dispatcher (keyed by `Type` + `Set<Annotation>` + response `Type`), and sets up Vert.x consumers on unique addresses. The `EventEnvelope` codec is registered at init time.
 
 ### 8.3 Relationship with Existing VertxProcessor
 
@@ -388,8 +361,8 @@ Extensions can also provide consumers via build items, allowing framework-level 
 | `@ConsumeEvent` | `@OnEvent` equivalent |
 |---|---|
 | `@ConsumeEvent("address")` | `@OnEvent` (address derived from type) |
-| `@ConsumeEvent(blocking = true)` | `@OnEvent(blocking = true)` |
-| `@ConsumeEvent(ordered = true)` | `@OnEvent(ordered = true)` |
+| `@ConsumeEvent(blocking = true)` | `@OnEvent(blocking = true)` (TODO: replace with `@Blocking`) |
+| `@ConsumeEvent(ordered = true)` | No equivalent — removed |
 | `@ConsumeEvent(codec = MyCodec.class)` | `@OnEvent(codec = MyCodec.class)` or auto-codec |
 | `@ConsumeEvent(local = false)` | Out of scope (no clustering) |
 
@@ -491,10 +464,18 @@ For dynamic consumers not known at build time:
 ```java
 @Inject QuarkusEvent<Order> orderEvent;
 
-// Programmatic consumer registration with full subtype matching (see §6)
+// Fire-and-forget consumer with full subtype matching (see §6)
 EventConsumerRegistration reg = orderEvent.consumer(Order.class, order -> {
     // handle order
 });
+
+// Sync request-reply consumer
+EventConsumerRegistration reg2 = orderEvent.replyingConsumer(Order.class,
+    order -> new Confirmation(order.id()), Confirmation.class);
+
+// Async request-reply consumer
+EventConsumerRegistration reg3 = orderEvent.replyingConsumerAsync(Order.class,
+    order -> Uni.createFrom().item(new Confirmation(order.id())), Confirmation.class);
 
 // Unregister when done
 reg.unregister();
@@ -509,15 +490,13 @@ public interface EventConsumerRegistration {
 ### 11.3 Consumer Annotation
 
 ```java
-@Target(METHOD)
+@Target(METHOD)  // TODO: move to PARAMETER as marker annotation (see §17)
 @Retention(RUNTIME)
 public @interface OnEvent {
 
     /** If true, run on a worker thread. */
     boolean blocking() default false;
-
-    /** If true, blocking invocations are serialized. */
-    boolean ordered() default false;
+    // TODO: replace with @Blocking/@NonBlocking + return type inference
 }
 ```
 
@@ -534,7 +513,7 @@ Note: **No `value()` / address field** — the address is always derived from th
 | P1 | **Observing `Object`** would register on every event address, creating a performance disaster | High | Build-time error; require specific type (see §12.2.5) |
 | P2 | **Parameterized types not visible to Jandex** — if `Envelope<Order>` is never used as a concrete type in a field/parameter, Jandex can't discover it | Medium | Require event types to be Jandex-discoverable; provide `@EventType` escape hatch |
 | P3 | **Multiple reply-capable consumers** for the same type produce ambiguous request-response behavior | Medium | Build-time warning + `@Priority` ordering |
-| P4 | **Programmatic consumers can't do subtype matching** in native mode (no reflection for class hierarchy) | Low | Document limitation; exact-type only |
+| P4 | ~~**Programmatic consumers can't do subtype matching**~~ | ~~Low~~ | **RESOLVED** — central dispatcher with `isMatchingEvent` handles subtype matching for all consumers |
 | P5 | **Interface-based events with multiple implementations** create many registrations (N interfaces × M impls) | Low | Monitor at build time; warn if >100 registrations per consumer |
 | P6 | **Sealed class hierarchies** — Java sealed classes restrict subtypes, could be leveraged to limit fan-out | Low (Nice-to-have) | Detect `sealed` modifier in Jandex; only fan-out to permitted subtypes |
 
@@ -637,27 +616,62 @@ The initial POC (branch `unifiedEventing`) used **consumer-side fan-out**: at bu
 
 **The fix: move type matching from Vert.x's routing into our own dispatch layer.**
 
-Instead of mapping event types to Vert.x addresses and relying on Vert.x for routing, we use a **central dispatcher** that performs CDI-style type resolution at send time:
+Instead of mapping event types to Vert.x addresses and relying on Vert.x for routing, we use a **central dispatcher** that delegates to CDI's `BeanContainer.isMatchingEvent()`:
 
 - Each consumer registers on a **single unique Vert.x address** (for context isolation and async delivery).
-- A central `EventDispatcher` maintains a registry of consumers keyed by their observed type.
-- When an event is sent, the dispatcher computes the **type closure** of `event.getClass()` by walking up via `Class.getSuperclass()` / `Class.getInterfaces()` — this works in native mode.
-- The dispatcher finds all consumers whose observed type appears in the type closure, then applies delivery semantics (publish = all, send = round-robin one, request = one with reply).
+- A central `EventDispatcher` maintains a registry of consumers with their `Type`, `Set<Annotation>` qualifiers, and response `Type`.
+- When an event is sent, the dispatcher iterates all consumers and calls `isMatchingEvent()` to find matches (results are cached and invalidated on registration changes).
+- For `request()`, the dispatcher additionally filters by response type assignability.
 
 **What this enables:**
-- Programmatic `consumer(Class<T>, Consumer<T>)` works with full subtype matching — just registers in the same dispatcher registry.
-- No build-time subtype registry needed — we walk UP from the event's runtime type, not DOWN from the consumer's observed type.
+- Full CDI-compliant type matching including parameterized types, qualifier member values, and catch-all behavior.
+- Programmatic consumers work with full subtype matching — they register in the same dispatcher.
 - Consistent behavior for both declarative and programmatic consumers.
 
 **What we give up:**
 - Vert.x's built-in round-robin and broadcast — we implement these in the dispatcher.
 - One extra in-process hop (dispatcher → consumer), negligible in practice.
 
-This is the same approach CDI's `Event.fire()` uses internally — `EventImpl` resolves observers at fire time via `HierarchyDiscovery.getTypeClosure()`.
+---
+
+## 16. Implemented Changes (branch `unifiedEventing2`)
+
+The following enhancements have been implemented on top of the original POC:
+
+### 16.1 CDI `isMatchingEvent` for type and qualifier resolution
+Replaced manual type closure and string-based qualifier matching with `BeanContainer.isMatchingEvent()`. Supports parameterized types, qualifier member values, and CDI-standard catch-all behavior for unqualified consumers. Consumer metadata (Type + Annotations) is generated into a single Gizmo2 class at build time.
+
+### 16.2 EventInfo metadata
+Emitters attach metadata via `withMetadata(String, Object)`. Consumers access it through an optional `EventInfo` parameter (alongside the event and CDI-injected params). The Vert.x message body is now an `EventEnvelope` record.
+
+### 16.3 Multi-parameter consumer methods
+`@OnEvent` methods support additional CDI-injected parameters and `EventInfo`. Event is at position 0 (TODO: replace with marker annotation, see §17).
+
+### 16.4 Response type filtering for `request()`
+`request()` filters consumers by return type assignability — void consumers and consumers with incompatible return types are excluded.
+
+### 16.5 Programmatic request-reply consumers
+Added `replyingConsumer()` (sync) and `replyingConsumerAsync()` (async) for programmatic consumers that can reply to `request()` calls.
+
+### 16.6 Synthetic bean for QuarkusEvent
+Replaced CDI producer with a synthetic bean, enabling `@Inject @SomeQualifier QuarkusEvent<T>`.
+
+### 16.7 Removed `ordered` from `@OnEvent`
+The `ordered` flag was a Vert.x EventBus implementation detail and has been removed.
 
 ---
 
-## 16. Next Steps
+## 17. Remaining TODOs
+
+1. **Marker annotation** — Move `@OnEvent` from method-level to parameter-level annotation, identifying the event parameter explicitly (any position). This removes the position-0 convention.
+2. **Execution model** — Replace `@OnEvent(blocking=true)` with return type inference + `@Blocking`/`@NonBlocking` annotations, consistent with other Quarkus extensions. Add `@RunOnVirtualThread` support.
+3. **Context propagation** — Implement security + tracing propagation as designed in §7.
+4. **CLI application verification** — Test without Vert.x HTTP dependency.
+5. **Documentation** — Quarkus guide + migration guide from `@ConsumeEvent`.
+
+---
+
+## 18. Next Steps
 
 1. **Align on open questions** (§12.2) with the working group
 2. **Prototype the build-time processor** — start with simple class-based types, no generics
