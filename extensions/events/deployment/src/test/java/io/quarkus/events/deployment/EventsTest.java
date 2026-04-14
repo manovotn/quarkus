@@ -95,24 +95,21 @@ public class EventsTest {
         /**
          * Observes OrderCreated and returns a reply.
          */
-        @OnEvent
-        String onOrderCreated(OrderCreated event) {
+        String onOrderCreated(@OnEvent OrderCreated event) {
             return "Order received: " + event.orderId;
         }
 
         /**
          * Observes all DomainEvent subtypes and returns a reply.
          */
-        @OnEvent
-        String auditAll(DomainEvent event) {
+        String auditAll(@OnEvent DomainEvent event) {
             return "Audited: " + event.getClass().getSimpleName();
         }
 
         /**
          * Observes PaymentReceived and returns a reply via Uni.
          */
-        @OnEvent
-        Uni<String> onPaymentReceived(PaymentReceived event) {
+        Uni<String> onPaymentReceived(@OnEvent PaymentReceived event) {
             return Uni.createFrom().item("Payment processed: " + event.paymentId);
         }
     }
@@ -124,8 +121,7 @@ public class EventsTest {
     public static class SendConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onSendTest(SendTestEvent event) {
+        void onSendTest(@OnEvent SendTestEvent event) {
             LATCH.countDown();
         }
     }
@@ -137,8 +133,7 @@ public class EventsTest {
     public static class PublishConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPublishTest(PublishTestEvent event) {
+        void onPublishTest(@OnEvent PublishTestEvent event) {
             LATCH.countDown();
         }
     }
@@ -150,8 +145,7 @@ public class EventsTest {
     public static class PublishConsumer2 {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPublishTest(PublishTestEvent event) {
+        void onPublishTest(@OnEvent PublishTestEvent event) {
             LATCH.countDown();
         }
     }

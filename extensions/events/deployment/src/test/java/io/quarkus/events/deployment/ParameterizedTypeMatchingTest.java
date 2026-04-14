@@ -100,8 +100,7 @@ public class ParameterizedTypeMatchingTest {
     public static class OrderEnvelopeConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onOrderEnvelope(Envelope<Order> envelope) {
+        String onOrderEnvelope(@OnEvent Envelope<Order> envelope) {
             LATCH.countDown();
             return "Order:" + envelope.payload().id();
         }
@@ -111,8 +110,7 @@ public class ParameterizedTypeMatchingTest {
     public static class PaymentEnvelopeConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onPaymentEnvelope(Envelope<Payment> envelope) {
+        String onPaymentEnvelope(@OnEvent Envelope<Payment> envelope) {
             LATCH.countDown();
             return "Payment:" + envelope.payload().id();
         }

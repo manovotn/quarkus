@@ -119,25 +119,21 @@ public class ResponseTypeMatchingTest {
         static volatile CountDownLatch INTEGER_LATCH = new CountDownLatch(1);
         static volatile CountDownLatch ASYNC_LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void fireAndForget(Command cmd) {
+        void fireAndForget(@OnEvent Command cmd) {
             VOID_LATCH.countDown();
         }
 
-        @OnEvent
-        String stringReply(Command cmd) {
+        String stringReply(@OnEvent Command cmd) {
             STRING_LATCH.countDown();
             return "string:" + cmd.value();
         }
 
-        @OnEvent
-        Integer integerReply(Command cmd) {
+        Integer integerReply(@OnEvent Command cmd) {
             INTEGER_LATCH.countDown();
             return 42;
         }
 
-        @OnEvent
-        Uni<String> asyncStringReply(Command cmd) {
+        Uni<String> asyncStringReply(@OnEvent Command cmd) {
             ASYNC_LATCH.countDown();
             return Uni.createFrom().item("async:" + cmd.value());
         }

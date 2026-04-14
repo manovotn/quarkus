@@ -61,8 +61,7 @@ public class ClassHierarchyFanOutTest {
     public static class AnimalConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onAnimal(Animal animal) {
+        String onAnimal(@OnEvent Animal animal) {
             LATCH.countDown();
             return "Animal: " + animal.name;
         }
@@ -72,8 +71,7 @@ public class ClassHierarchyFanOutTest {
     public static class DogConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onDog(Dog dog) {
+        String onDog(@OnEvent Dog dog) {
             LATCH.countDown();
             return "Dog: " + dog.name;
         }

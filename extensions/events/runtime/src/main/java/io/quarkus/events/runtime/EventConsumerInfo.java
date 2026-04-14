@@ -13,13 +13,15 @@ public class EventConsumerInfo {
     private final RuntimeValue<Invoker<Object, Object>> invoker;
     private final boolean blocking;
     private final int parameterCount;
+    private final int eventParamPosition;
     private final int eventInfoPosition;
 
     public EventConsumerInfo(RuntimeValue<Invoker<Object, Object>> invoker, boolean blocking,
-            int parameterCount, int eventInfoPosition) {
+            int parameterCount, int eventParamPosition, int eventInfoPosition) {
         this.invoker = invoker;
         this.blocking = blocking;
         this.parameterCount = parameterCount;
+        this.eventParamPosition = eventParamPosition;
         this.eventInfoPosition = eventInfoPosition;
     }
 
@@ -33,6 +35,10 @@ public class EventConsumerInfo {
 
     public int getParameterCount() {
         return parameterCount;
+    }
+
+    public int getEventParamPosition() {
+        return eventParamPosition;
     }
 
     public int getEventInfoPosition() {

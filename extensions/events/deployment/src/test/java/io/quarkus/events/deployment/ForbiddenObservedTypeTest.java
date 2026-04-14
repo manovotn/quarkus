@@ -26,8 +26,7 @@ public class ForbiddenObservedTypeTest {
 
     @ApplicationScoped
     public static class ObjectConsumer {
-        @OnEvent
-        void onAny(Object event) {
+        void onAny(@OnEvent Object event) {
             fail("Should not be reached — build should fail");
         }
     }

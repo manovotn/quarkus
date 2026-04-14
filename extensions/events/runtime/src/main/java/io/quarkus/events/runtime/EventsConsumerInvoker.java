@@ -18,20 +18,23 @@ public class EventsConsumerInvoker {
 
     private final Invoker<Object, Object> invoker;
     private final int parameterCount;
+    private final int eventParamPosition;
     private final int eventInfoPosition;
 
-    public EventsConsumerInvoker(Invoker<Object, Object> invoker, int parameterCount, int eventInfoPosition) {
+    public EventsConsumerInvoker(Invoker<Object, Object> invoker, int parameterCount, int eventParamPosition,
+            int eventInfoPosition) {
         this.invoker = invoker;
         this.parameterCount = parameterCount;
+        this.eventParamPosition = eventParamPosition;
         this.eventInfoPosition = eventInfoPosition;
     }
 
     public void invoke(Message<Object> message) throws Exception {
         EventEnvelope envelope = (EventEnvelope) message.body();
 
-        // Build args array: event at position 0, EventInfo at its position, nulls for CDI-injected params
+        // Build args array: event at its position, EventInfo at its position, nulls for CDI-injected params
         Object[] args = new Object[parameterCount];
-        args[0] = envelope.event();
+        args[eventParamPosition] = envelope.event();
         if (eventInfoPosition >= 0) {
             args[eventInfoPosition] = new EventInfoImpl(envelope);
         }

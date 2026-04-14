@@ -112,7 +112,8 @@ public class EventsRecorder {
         int consumerId = 0;
         for (EventConsumerInfo info : consumers) {
             EventsConsumerInvoker invoker = new EventsConsumerInvoker(
-                    info.getInvoker().getValue(), info.getParameterCount(), info.getEventInfoPosition());
+                    info.getInvoker().getValue(), info.getParameterCount(),
+                    info.getEventParamPosition(), info.getEventInfoPosition());
             boolean blocking = info.isBlocking();
 
             // Each consumer gets a unique address

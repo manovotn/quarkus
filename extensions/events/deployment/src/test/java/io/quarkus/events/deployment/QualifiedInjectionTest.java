@@ -114,8 +114,7 @@ public class QualifiedInjectionTest {
     public static class HighPriorityConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onHighPriority(@Priority Alert alert) {
+        String onHighPriority(@OnEvent @Priority Alert alert) {
             LATCH.countDown();
             return "HIGH:" + alert.message();
         }
@@ -125,8 +124,7 @@ public class QualifiedInjectionTest {
     public static class NormalConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onAlert(Alert alert) {
+        String onAlert(@OnEvent Alert alert) {
             LATCH.countDown();
             return "normal:" + alert.message();
         }

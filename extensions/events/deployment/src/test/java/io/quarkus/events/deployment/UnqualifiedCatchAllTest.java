@@ -103,8 +103,7 @@ public class UnqualifiedCatchAllTest {
     public static class CatchAllConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onNotification(Notification n) {
+        void onNotification(@OnEvent Notification n) {
             LATCH.countDown();
         }
     }
@@ -113,8 +112,7 @@ public class UnqualifiedCatchAllTest {
     public static class PremiumConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPremiumNotification(@Premium Notification n) {
+        void onPremiumNotification(@OnEvent @Premium Notification n) {
             LATCH.countDown();
         }
     }

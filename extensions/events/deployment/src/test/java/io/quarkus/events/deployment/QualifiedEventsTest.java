@@ -154,16 +154,14 @@ public class QualifiedEventsTest {
 
     @ApplicationScoped
     public static class QualifiedRequestConsumer {
-        @OnEvent
-        String onPremiumRequest(@Premium RequestEvent event) {
+        String onPremiumRequest(@OnEvent @Premium RequestEvent event) {
             return "Premium: " + event.id;
         }
     }
 
     @ApplicationScoped
     public static class UnqualifiedRequestConsumer {
-        @OnEvent
-        String onRequest(RequestEvent event) {
+        String onRequest(@OnEvent RequestEvent event) {
             return "Standard: " + event.id;
         }
     }
@@ -172,8 +170,7 @@ public class QualifiedEventsTest {
     public static class QualifiedSendConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPremiumSend(@Premium SendEvent event) {
+        void onPremiumSend(@OnEvent @Premium SendEvent event) {
             LATCH.countDown();
         }
     }
@@ -182,8 +179,7 @@ public class QualifiedEventsTest {
     public static class QualifiedPublishConsumer1 {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPremiumPublish(@Premium PublishEvent event) {
+        void onPremiumPublish(@OnEvent @Premium PublishEvent event) {
             LATCH.countDown();
         }
     }
@@ -192,8 +188,7 @@ public class QualifiedEventsTest {
     public static class QualifiedPublishConsumer2 {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        void onPremiumPublish(@Premium PublishEvent event) {
+        void onPremiumPublish(@OnEvent @Premium PublishEvent event) {
             LATCH.countDown();
         }
     }
@@ -202,8 +197,7 @@ public class QualifiedEventsTest {
     public static class IsolationQualifiedConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onPremiumIsolation(@Premium IsolationEvent event) {
+        String onPremiumIsolation(@OnEvent @Premium IsolationEvent event) {
             LATCH.countDown();
             return "Premium: " + event.id;
         }
@@ -213,8 +207,7 @@ public class QualifiedEventsTest {
     public static class IsolationUnqualifiedConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onIsolation(IsolationEvent event) {
+        String onIsolation(@OnEvent IsolationEvent event) {
             LATCH.countDown();
             return "Standard: " + event.id;
         }
@@ -228,8 +221,7 @@ public class QualifiedEventsTest {
     public static class MultiQualifierConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onMultiQualified(@Express @Premium MultiQualifierEvent event) {
+        String onMultiQualified(@OnEvent @Express @Premium MultiQualifierEvent event) {
             LATCH.countDown();
             return "MultiQualified: " + event.id;
         }

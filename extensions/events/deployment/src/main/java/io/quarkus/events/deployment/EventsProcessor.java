@@ -117,42 +117,47 @@ public class EventsProcessor {
                 if (method.isSynthetic()) {
                     continue;
                 }
-                AnnotationInstance onEvent = annotationStore.getAnnotation(method, ON_EVENT);
+                // Find the parameter annotated with @OnEvent
+                int eventParamPosition = -1;
+                AnnotationInstance onEvent = null;
+                for (AnnotationInstance a : annotationStore.getAnnotations(method)) {
+                    if (a.name().equals(ON_EVENT)
+                            && a.target() != null
+                            && a.target().kind() == org.jboss.jandex.AnnotationTarget.Kind.METHOD_PARAMETER) {
+                        eventParamPosition = a.target().asMethodParameter().position();
+                        onEvent = a;
+                        break;
+                    }
+                }
                 if (onEvent == null) {
                     continue;
                 }
 
-                // Validate: at least one parameter
-                if (method.parametersCount() < 1) {
-                    throw new IllegalStateException(String.format(
-                            "@OnEvent method must have at least one parameter (the event): %s [bean: %s]",
-                            method, bean));
-                }
-
-                // TODO: Consider whether the event parameter should be identified by a marker
-                // annotation (like CDI's @Observes) rather than by convention (always position 0).
-                // A marker annotation would allow the event at any position and be more explicit.
-
-                // Event parameter is always at position 0
-                Type paramType = method.parameterType(0);
+                // The annotated parameter is the event
+                Type paramType = method.parameterType(eventParamPosition);
                 DotName observedTypeName = paramType.name();
 
                 // Validate: no overly broad types
                 if (FORBIDDEN_OBSERVED_TYPES.contains(observedTypeName)) {
                     throw new IllegalStateException(String.format(
-                            "@OnEvent method must not observe %s — use a specific event type or marker interface: %s [bean: %s]",
+                            "@OnEvent parameter must not observe %s — use a specific event type or marker interface: %s [bean: %s]",
                             observedTypeName, method, bean));
                 }
 
-                // Extract qualifier AnnotationInstances from the event parameter
-                List<AnnotationInstance> qualifiers = extractQualifiers(method, annotationStore, combinedIndex);
+                // Extract qualifier AnnotationInstances from the @OnEvent parameter
+                List<AnnotationInstance> qualifiers = extractQualifiers(method, eventParamPosition, annotationStore,
+                        combinedIndex);
 
                 // Detect EventInfo parameter and CDI-injected parameters
                 int eventInfoPosition = -1;
                 InvokerBuilder builder = invokerFactory.createInvoker(bean, method)
                         .withInstanceLookup();
 
-                for (int i = 1; i < method.parametersCount(); i++) {
+                for (int i = 0; i < method.parametersCount(); i++) {
+                    if (i == eventParamPosition) {
+                        // Event parameter — provided by the invoker wrapper
+                        continue;
+                    }
                     if (method.parameterType(i).name().equals(EVENT_INFO)) {
                         eventInfoPosition = i;
                         // EventInfo is provided by the invoker wrapper, not CDI lookup
@@ -181,7 +186,7 @@ public class EventsProcessor {
 
                 eventConsumers.produce(new EventConsumerBuildItem(
                         paramType, responseType, qualifiers, invoker, blocking,
-                        method.parametersCount(), eventInfoPosition));
+                        method.parametersCount(), eventParamPosition, eventInfoPosition));
                 LOGGER.debugf("Found @OnEvent consumer: %s on %s (type: %s, qualifiers: %s)",
                         method, bean, paramType, qualifiers);
             }
@@ -279,6 +284,7 @@ public class EventsProcessor {
                         recorderContext.newInstance(consumer.getInvoker().getClassName()),
                         consumer.isBlocking(),
                         consumer.getParameterCount(),
+                        consumer.getEventParamPosition(),
                         consumer.getEventInfoPosition()));
             }
         }
@@ -312,18 +318,17 @@ public class EventsProcessor {
     }
 
     /**
-     * Extract qualifier AnnotationInstances from the event parameter.
+     * Extract qualifier AnnotationInstances from the event parameter at the given position.
      */
-    private List<AnnotationInstance> extractQualifiers(MethodInfo method, AnnotationStore annotationStore,
-            CombinedIndexBuildItem combinedIndex) {
+    private List<AnnotationInstance> extractQualifiers(MethodInfo method, int eventParamPosition,
+            AnnotationStore annotationStore, CombinedIndexBuildItem combinedIndex) {
         List<AnnotationInstance> qualifiers = new ArrayList<>();
         for (AnnotationInstance annotation : annotationStore.getAnnotations(method)) {
-            // Only look at annotations on the first parameter (the event payload)
             if (annotation.target() == null
                     || annotation.target().kind() != org.jboss.jandex.AnnotationTarget.Kind.METHOD_PARAMETER) {
                 continue;
             }
-            if (annotation.target().asMethodParameter().position() != 0) {
+            if (annotation.target().asMethodParameter().position() != eventParamPosition) {
                 continue;
             }
             DotName annotationName = annotation.name();

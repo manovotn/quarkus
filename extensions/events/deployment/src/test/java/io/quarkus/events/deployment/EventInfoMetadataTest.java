@@ -79,8 +79,7 @@ public class EventInfoMetadataTest {
     public static class MetadataConsumer {
         static final AtomicReference<EventInfo> RESULT = new AtomicReference<>();
 
-        @OnEvent
-        String onMsg(Msg msg, EventInfo info) {
+        String onMsg(@OnEvent Msg msg, EventInfo info) {
             RESULT.set(info);
             String traceId = (String) info.getMetadata("traceId");
             return msg.text() + ":" + traceId;

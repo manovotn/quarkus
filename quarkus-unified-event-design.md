@@ -76,8 +76,8 @@ interface DomainEvent {}
 class OrderCreated implements DomainEvent {}
 class OrderCancelled implements DomainEvent {}
 
-@OnEvent void auditAll(DomainEvent e) { ... }      // consumer A
-@OnEvent void onOrder(OrderCreated e) { ... }       // consumer B
+void auditAll(@OnEvent DomainEvent e) { ... }      // consumer A
+void onOrder(@OnEvent OrderCreated e) { ... }       // consumer B
 ```
 
 Dispatcher registry:
@@ -120,8 +120,8 @@ Sending `new OrderCancelled()`:
 Parameterized type matching is fully implemented via CDI's `BeanContainer.isMatchingEvent()`:
 
 ```java
-@OnEvent void onOrderEnvelope(Envelope<Order> e) { ... }
-@OnEvent void onStringEnvelope(Envelope<String> e) { ... }
+void onOrderEnvelope(@OnEvent Envelope<Order> e) { ... }
+void onStringEnvelope(@OnEvent Envelope<String> e) { ... }
 
 quarkusEvent.publish(new Envelope<>(new Order()));  // only reaches onOrderEnvelope
 ```
@@ -165,13 +165,11 @@ A consumer declares that it can handle a given type. If the sender used `request
 @ApplicationScoped
 public class OrderHandlers {
 
-    @OnEvent
-    void onOrderCreated(OrderCreated event) {
+    void onOrderCreated(@OnEvent OrderCreated event) {
         // fire-and-forget consumer (works with publish, send, or request)
     }
 
-    @OnEvent
-    Uni<OrderConfirmation> processOrder(OrderCreated event) {
+    Uni<OrderConfirmation> processOrder(@OnEvent OrderCreated event) {
         // reply-capable consumer (return value becomes the reply for request())
         // for publish/send, return value is ignored
         return Uni.createFrom().item(new OrderConfirmation(...));
@@ -202,11 +200,9 @@ In the current Vert.x model, string-based addresses serve as an implicit qualifi
 
 **Consumer side** (qualifiers are placed on the parameter, not the method, to avoid ArC misinterpreting the method as a CDI producer):
 ```java
-@OnEvent
-void handlePremiumOrder(@Premium Order order) { ... }
+void handlePremiumOrder(@OnEvent @Premium Order order) { ... }
 
-@OnEvent
-void handleAnyOrder(Order order) { ... }
+void handleAnyOrder(@OnEvent Order order) { ... }
 ```
 
 **Sender side:**
@@ -294,15 +290,12 @@ Quarkus already has infrastructure for this in `SmallRyeContextPropagation` and 
 > a Vert.x EventBus implementation detail.
 
 ```java
-@OnEvent
-void handleBlocking(OrderCreated e) { ... }  // void → inferred as blocking
+void handleBlocking(@OnEvent OrderCreated e) { ... }  // void → inferred as blocking
 
-@OnEvent
-Uni<Void> handleNonBlocking(OrderCreated e) { ... }  // Uni → inferred as non-blocking
+Uni<Void> handleNonBlocking(@OnEvent OrderCreated e) { ... }  // Uni → inferred as non-blocking
 
-@OnEvent
 @RunOnVirtualThread
-void handleVirtualThread(OrderCreated e) { ... }  // explicit virtual thread
+void handleVirtualThread(@OnEvent OrderCreated e) { ... }  // explicit virtual thread
 ```
 
 ---
@@ -313,8 +306,8 @@ void handleVirtualThread(OrderCreated e) { ... }  // explicit virtual thread
 
 The `EventsProcessor` (deployment module) performs:
 
-1. **Scan** — iterate over CDI beans with `@OnEvent` methods via `BeanRegistrationPhaseBuildItem` and `AnnotationStore`
-2. **Extract** — observed type from method parameter, qualifier annotations from parameter annotations
+1. **Scan** — iterate over CDI beans, find methods with a parameter annotated `@OnEvent` via `AnnotationStore`
+2. **Extract** — observed type from the `@OnEvent`-annotated parameter (any position), qualifier annotations from the same parameter
 3. **Validate** — error if observed type is `Object`, `Serializable`, or similar overly broad types; error if method has wrong parameter count
 4. **Generate invokers** — create ArC invokers with `withArgumentLookup()` for CDI-injected parameters and return value transformer for `Uni` → `CompletionStage`
 5. **Generate metadata class** — a single Gizmo2 class containing `Type`, `Set<Annotation>`, and response `Type` for all consumers via `RuntimeTypeCreator` and `AnnotationLiteralProcessor`
@@ -490,7 +483,7 @@ public interface EventConsumerRegistration {
 ### 11.3 Consumer Annotation
 
 ```java
-@Target(METHOD)  // TODO: move to PARAMETER as marker annotation (see §17)
+@Target(PARAMETER)
 @Retention(RUNTIME)
 public @interface OnEvent {
 
@@ -500,7 +493,7 @@ public @interface OnEvent {
 }
 ```
 
-Note: **No `value()` / address field** — the address is always derived from the method parameter type. This is the key difference from `@ConsumeEvent`. The name `@OnEvent` is a working name subject to discussion.
+The annotation is placed on the event parameter, identifying both the event type and the consumer method. **No `value()` / address field** — the address is always derived from the annotated parameter's type. The name `@OnEvent` is a working name subject to discussion.
 
 ---
 
@@ -644,8 +637,8 @@ Replaced manual type closure and string-based qualifier matching with `BeanConta
 ### 16.2 EventInfo metadata
 Emitters attach metadata via `withMetadata(String, Object)`. Consumers access it through an optional `EventInfo` parameter (alongside the event and CDI-injected params). The Vert.x message body is now an `EventEnvelope` record.
 
-### 16.3 Multi-parameter consumer methods
-`@OnEvent` methods support additional CDI-injected parameters and `EventInfo`. Event is at position 0 (TODO: replace with marker annotation, see §17).
+### 16.3 Multi-parameter consumer methods and marker annotation
+`@OnEvent` is a parameter-level annotation that identifies the event parameter (at any position). Other parameters are CDI-injected or `EventInfo`. Qualifiers are placed on the same parameter as `@OnEvent`.
 
 ### 16.4 Response type filtering for `request()`
 `request()` filters consumers by return type assignability — void consumers and consumers with incompatible return types are excluded.
@@ -663,7 +656,7 @@ The `ordered` flag was a Vert.x EventBus implementation detail and has been remo
 
 ## 17. Remaining TODOs
 
-1. **Marker annotation** — Move `@OnEvent` from method-level to parameter-level annotation, identifying the event parameter explicitly (any position). This removes the position-0 convention.
+1. ~~**Marker annotation**~~ **DONE** — `@OnEvent` is now a parameter-level annotation identifying the event parameter at any position.
 2. **Execution model** — Replace `@OnEvent(blocking=true)` with return type inference + `@Blocking`/`@NonBlocking` annotations, consistent with other Quarkus extensions. Add `@RunOnVirtualThread` support.
 3. **Context propagation** — Implement security + tracing propagation as designed in §7.
 4. **CLI application verification** — Test without Vert.x HTTP dependency.

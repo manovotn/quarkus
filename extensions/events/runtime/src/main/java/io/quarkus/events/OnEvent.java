@@ -1,16 +1,16 @@
 package io.quarkus.events;
 
-import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.PARAMETER;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 
 /**
- * Marks a business method to be automatically registered as an event consumer.
+ * Identifies the event parameter of a consumer method on a CDI bean.
  * <p>
- * The event type (address) is derived from the method parameter type — there is no string-based address.
- * The method can accept the event payload directly or wrapped in additional context.
+ * The annotated parameter determines the event type for routing. The method may have
+ * additional parameters: {@link EventInfo} for event metadata, or any CDI bean for injection.
  * <p>
  * If the method returns a value, it becomes the reply for request-response interactions.
  * For fire-and-forget ({@code send}/{@code publish}), the return value is discarded.
@@ -19,20 +19,18 @@ import java.lang.annotation.Target;
  * &#64;ApplicationScoped
  * class OrderHandlers {
  *
- *     &#64;OnEvent
- *     void onOrderCreated(OrderCreated event) {
+ *     void onOrderCreated(&#64;OnEvent OrderCreated event) {
  *         // fire-and-forget consumer
  *     }
  *
- *     &#64;OnEvent
- *     Uni&lt;OrderConfirmation&gt; processOrder(OrderCreated event) {
- *         // reply-capable consumer
+ *     Uni&lt;OrderConfirmation&gt; processOrder(&#64;OnEvent OrderCreated event, MyService service) {
+ *         // reply-capable consumer with CDI-injected parameter
  *         return Uni.createFrom().item(new OrderConfirmation(...));
  *     }
  * }
  * </pre>
  */
-@Target(METHOD)
+@Target(PARAMETER)
 @Retention(RUNTIME)
 public @interface OnEvent {
 

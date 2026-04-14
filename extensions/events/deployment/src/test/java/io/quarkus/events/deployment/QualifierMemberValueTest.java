@@ -121,8 +121,7 @@ public class QualifierMemberValueTest {
     public static class OrdersConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onOrderTrade(@Channel("orders") TradeEvent event) {
+        String onOrderTrade(@OnEvent @Channel("orders") TradeEvent event) {
             LATCH.countDown();
             return "orders:" + event.id();
         }
@@ -132,8 +131,7 @@ public class QualifierMemberValueTest {
     public static class PaymentsConsumer {
         static volatile CountDownLatch LATCH = new CountDownLatch(1);
 
-        @OnEvent
-        String onPaymentTrade(@Channel("payments") TradeEvent event) {
+        String onPaymentTrade(@OnEvent @Channel("payments") TradeEvent event) {
             LATCH.countDown();
             return "payments:" + event.id();
         }

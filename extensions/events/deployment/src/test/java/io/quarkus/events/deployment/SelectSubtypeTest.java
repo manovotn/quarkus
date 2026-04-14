@@ -52,16 +52,14 @@ public class SelectSubtypeTest {
 
     @ApplicationScoped
     public static class SubEventAConsumer {
-        @OnEvent
-        String onA(SubEventA event) {
+        String onA(@OnEvent SubEventA event) {
             return "A: " + event.value;
         }
     }
 
     @ApplicationScoped
     public static class SubEventBConsumer {
-        @OnEvent
-        String onB(SubEventB event) {
+        String onB(@OnEvent SubEventB event) {
             return "B: " + event.value;
         }
     }
