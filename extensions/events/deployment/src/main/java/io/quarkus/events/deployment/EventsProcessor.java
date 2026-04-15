@@ -216,7 +216,8 @@ public class EventsProcessor {
             // Generate a single metadata registry class for all consumers
             metadataClassName = "io.quarkus.events.runtime.GeneratedConsumerMetadata_"
                     + HashUtil.sha256(eventConsumers.stream()
-                            .map(c -> c.getObservedType().toString() + c.getQualifiers().toString())
+                            .map(c -> c.getObservedType().name().toString() + c.getObservedType().kind()
+                                    + c.getQualifiers().size())
                             .collect(Collectors.joining(",")));
 
             ClassOutput classOutput = new GeneratedClassGizmo2Adaptor(generatedClasses, generatedResources, true);
