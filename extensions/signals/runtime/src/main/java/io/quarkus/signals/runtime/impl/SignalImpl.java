@@ -90,12 +90,12 @@ class SignalImpl<T> implements Signal<T> {
 
     @Override
     public void publish(T signal) {
-        emission.publish(signal).subscribe().with(NOOP_VOID_ITEM, NOOP_FAILURE);
+        emission.publish(signal).subscribe().with(NOOP_VOID_ITEM);
     }
 
     @Override
     public void send(T signal) {
-        emission.send(signal).subscribe().with(NOOP_VOID_ITEM, NOOP_FAILURE);
+        emission.send(signal).subscribe().with(NOOP_VOID_ITEM);
     }
 
     @Override
@@ -112,14 +112,6 @@ class SignalImpl<T> implements Signal<T> {
 
         @Override
         public void accept(Void t) {
-            // noop
-        }
-    };
-
-    private static final Consumer<Throwable> NOOP_FAILURE = new Consumer<Throwable>() {
-
-        @Override
-        public void accept(Throwable t) {
             // noop
         }
     };
