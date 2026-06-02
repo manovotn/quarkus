@@ -858,6 +858,9 @@ public abstract class AbstractQuarkusExtensionTest<S extends AbstractQuarkusExte
 
     private void runReproducibilityCheck(ExtensionContext extensionContext, Path testLocation, Path projectDir,
             int reproducibilityRuns, List<Consumer<BuildChainBuilder>> customizers) throws Exception {
+        String testName = extensionContext.getRequiredTestClass().getSimpleName();
+        System.out.printf("[AbstractQuarkusExtensionTest] Reproducibility check (%d runs) for %s%n",
+                reproducibilityRuns, testName);
         Map<String, byte[]> referenceInMemoryClasses = null;
         ApplicationModel cachedApplicationModel = null;
         for (int run = 1; run <= reproducibilityRuns; run++) {
@@ -901,6 +904,7 @@ public abstract class AbstractQuarkusExtensionTest<S extends AbstractQuarkusExte
                 inMemoryLogHandler.clearRecords();
             }
         }
+        System.out.printf("[AbstractQuarkusExtensionTest] Reproducibility check passed for %s%n", testName);
         throw new TestAbortedException(
                 "Reproducibility check passed (" + reproducibilityRuns + " runs). Test execution skipped.");
     }
