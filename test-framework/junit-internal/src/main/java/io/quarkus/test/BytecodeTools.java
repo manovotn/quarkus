@@ -8,32 +8,50 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.jar.Manifest;
 
 import org.jetbrains.java.decompiler.main.decompiler.BaseDecompiler;
 import org.jetbrains.java.decompiler.main.decompiler.PrintStreamLogger;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.main.extern.IResultSaver;
-import org.junit.jupiter.api.extension.ExtensionContext;
 
+// Note: Vineflower is a compile-scope dependency because this class imports it directly.
+// To make it optional, decompilation would need to be invoked reflectively.
 class BytecodeTools {
 
-    private static final DateTimeFormatter TEST_RUN_ID_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
     private static final Map<String, Object> VINEFLOWER_OPTIONS = createVineflowerOptions();
-    private static final Set<String> EXCLUDED = Set.of(
+
+    // Known non-deterministic classes. Each extension should fix its non-determinism;
+    // entries here are temporary workarounds.
+    // TODO: allow extensions to declare exclusions dynamically via a build item
+    private static final Set<String> DEFAULT_EXCLUDED = Set.of(
+            // DevUI handler classes that embed non-deterministic data
             "io/quarkus/runner/recorded/WebJarProcessor$processWebJarDevMode",
             "io/quarkus/runner/recorded/SmallRyeHealthProcessor$registerHealthUiHandler",
             "io/quarkus/runner/recorded/SmallRyeGraphQLProcessor$registerGraphQLUiHandler",
             "io/quarkus/runner/recorded/SwaggerUiProcessor$registerSwaggerUiHandler");
+
+    private static final Set<String> EXCLUDED = loadExclusions();
+
+    private static Set<String> loadExclusions() {
+        Set<String> result = new TreeSet<>(DEFAULT_EXCLUDED);
+        String additional = System.getProperty("quarkus.test.reproducibility-check.excludes");
+        if (additional != null && !additional.isBlank()) {
+            for (String prefix : additional.split(",")) {
+                String trimmed = prefix.trim();
+                if (!trimmed.isEmpty()) {
+                    result.add(trimmed);
+                }
+            }
+        }
+        return Set.copyOf(result);
+    }
 
     static void decompileClassDump(Path classInputDir, Path decompiledOutputDir, StringBuilder index) throws Exception {
         if (!Files.exists(classInputDir)) {
@@ -72,6 +90,7 @@ class BytecodeTools {
         TreeSet<String> extra = new TreeSet<>(current.keySet());
         extra.removeAll(reference.keySet());
 
+        // exclusions only suppress content changes, not missing/extra classes
         TreeSet<String> changed = new TreeSet<>();
         for (String resource : reference.keySet()) {
             byte[] currentBytes = current.get(resource);
@@ -87,9 +106,7 @@ class BytecodeTools {
     }
 
     static Path dumpReproducibilityMismatch(InMemoryClassDiff diff, Map<String, byte[]> reference, Map<String, byte[]> current,
-            int run, ExtensionContext extensionContext) {
-        String testRunId = createTestRunId(extensionContext);
-        Path baseDir = Path.of("target", "debug").resolve(testRunId).resolve("reproducibility-mismatch");
+            int run, Path baseDir) {
         Path run1Dir = baseDir.resolve("run-1");
         Path runNDir = baseDir.resolve("run-" + run);
 
@@ -141,12 +158,6 @@ class BytecodeTools {
                     + ", extra=" + extra.size() + " " + pretty(extra)
                     + ", changed=" + changed.size() + " " + pretty(changed);
         }
-    }
-
-    private static String createTestRunId(ExtensionContext extensionContext) {
-        String timestamp = LocalDateTime.now().format(TEST_RUN_ID_FORMAT);
-        String randomSuffix = String.format("%06x", ThreadLocalRandom.current().nextInt(0x1000000));
-        return extensionContext.getRequiredTestClass().getName() + "/" + timestamp + "-" + randomSuffix;
     }
 
     private static void writeClassDump(Path runDir, String resource, byte[] data) throws Exception {

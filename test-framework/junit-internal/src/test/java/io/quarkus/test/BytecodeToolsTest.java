@@ -16,8 +16,9 @@ class BytecodeToolsTest {
 
     @Test
     void identicalBytecodeProducesEmptyDiff() {
-        Map<String, byte[]> classes = generateSimpleClass("com.example.Hello");
-        var diff = BytecodeTools.diff(classes, classes);
+        Map<String, byte[]> reference = generateSimpleClass("com.example.Hello");
+        Map<String, byte[]> current = generateSimpleClass("com.example.Hello");
+        var diff = BytecodeTools.diff(reference, current);
         assertThat(diff.isEmpty()).isTrue();
     }
 
