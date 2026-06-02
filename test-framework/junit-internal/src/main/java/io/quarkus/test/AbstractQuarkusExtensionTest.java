@@ -812,7 +812,7 @@ public abstract class AbstractQuarkusExtensionTest<S extends AbstractQuarkusExte
                 runningQuarkusApplication.close();
                 runningQuarkusApplication = null;
             }
-            if (afterUndeployListener != null) {
+            if (afterUndeployListener != null && !reproducibilityCheckActive) {
                 afterUndeployListener.run();
             }
             if (curatedApplication != null) {
