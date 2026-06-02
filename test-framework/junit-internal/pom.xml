@@ -64,6 +64,11 @@
             <artifactId>awaitility</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.quarkus.gizmo</groupId>
+            <artifactId>gizmo2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.vineflower</groupId>
             <artifactId>vineflower</artifactId>
         </dependency>
