@@ -36,8 +36,11 @@ public class DisposerTest {
 
     @AfterAll
     public static void afterAll() {
-        assertNotNull(BigDecimalProducer.DISPOSED.get());
-        assertEquals(1, BigDecimalProducer.DESTROYED.get());
+        // @AfterAll is called even if all tests are skipped; Arc is never initialized during reproducibility checks
+        if (!ArcTestContainer.isReproducibilityCheckActive()) {
+            assertNotNull(BigDecimalProducer.DISPOSED.get());
+            assertEquals(1, BigDecimalProducer.DESTROYED.get());
+        }
     }
 
     @Test

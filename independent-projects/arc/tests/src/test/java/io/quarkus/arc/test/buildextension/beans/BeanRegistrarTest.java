@@ -62,7 +62,10 @@ public class BeanRegistrarTest {
 
     @AfterAll
     public static void assertDestroyerInvoked() {
-        Assertions.assertTrue(beanDestroyerInvoked);
+        // @AfterAll is called even if all tests are skipped; Arc is never initialized during reproducibility checks
+        if (!ArcTestContainer.isReproducibilityCheckActive()) {
+            Assertions.assertTrue(beanDestroyerInvoked);
+        }
     }
 
     @SuppressWarnings("serial")

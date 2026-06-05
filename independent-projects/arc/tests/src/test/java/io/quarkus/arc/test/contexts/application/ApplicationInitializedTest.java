@@ -29,8 +29,11 @@ public class ApplicationInitializedTest {
 
     @AfterAll
     public static void afterAll() {
-        assertTrue(Observer.DESTROYED.get());
-        assertTrue(Observer.BEFORE_DESTROYED.get());
+        // @AfterAll is called even if all tests are skipped; Arc is never initialized during reproducibility checks
+        if (!ArcTestContainer.isReproducibilityCheckActive()) {
+            assertTrue(Observer.DESTROYED.get());
+            assertTrue(Observer.BEFORE_DESTROYED.get());
+        }
     }
 
     @Dependent
