@@ -33,10 +33,6 @@ public class CDIProviderTest {
 
     @AfterAll
     public static void unset() {
-        // @AfterAll is called even if all tests are skipped; Arc is never initialized during reproducibility checks
-        if (ArcTestContainer.isReproducibilityCheckActive()) {
-            return;
-        }
         assertTrue(Moo.DESTROYED.get());
         try {
             Field providerField = CDI.class.getDeclaredField("configuredProvider");

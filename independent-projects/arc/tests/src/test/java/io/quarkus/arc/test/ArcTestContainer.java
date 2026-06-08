@@ -29,7 +29,9 @@ import org.jboss.jandex.DotName;
 import org.jboss.jandex.Index;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.Indexer;
+import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.AfterEachCallback;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.opentest4j.TestAbortedException;
@@ -62,10 +64,11 @@ import io.quarkus.arc.processor.bcextensions.ExtensionsEntryPoint;
  * It bootstraps Arc before each test method and shuts down afterwards.
  * Leverages root {@code ExtensionContext.Store} to store and retrieve some variables.
  */
-public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
+public class ArcTestContainer implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, AfterEachCallback {
 
     // our specific namespace for storing anything into ExtensionContext.Store
-    private static ExtensionContext.Namespace EXTENSION_NAMESPACE;
+    private static final ExtensionContext.Namespace EXTENSION_NAMESPACE = ExtensionContext.Namespace
+            .create(ArcTestContainer.class);
 
     // Strings used as keys in ExtensionContext.Store
     private static final String KEY_OLD_TCCL = "arcExtensionOldTccl";
@@ -73,10 +76,6 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
     private static final String TARGET_TEST_CLASSES = "target/test-classes";
 
     private static final String REPRODUCIBILITY_CHECK_PROPERTY = "quarkus.test.reproducibility-check";
-
-    public static boolean isReproducibilityCheckActive() {
-        return System.getProperty(REPRODUCIBILITY_CHECK_PROPERTY) != null;
-    }
 
     public static Builder builder() {
         return new Builder();
@@ -350,13 +349,25 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
         this.reproducibilityRuns = parseReproducibilityRuns();
     }
 
-    // this is where we start Arc, we operate on a per-method basis
+    @Override
+    public void beforeAll(ExtensionContext extensionContext) throws Exception {
+        if (reproducibilityRuns > 0 && !shouldFail) {
+            Class<?> testClass = extensionContext.getRequiredTestClass();
+            BeanArchiveIndexes indexes = buildBeanArchiveIndexes();
+            runReproducibilityCheck(testClass, indexes.immutableBeanArchiveIndex, indexes.applicationIndex,
+                    reproducibilityRuns);
+        }
+    }
+
+    @Override
+    public void afterAll(ExtensionContext extensionContext) throws Exception {
+    }
+
     @Override
     public void beforeEach(ExtensionContext extensionContext) throws Exception {
         getRootExtensionStore(extensionContext).put(KEY_OLD_TCCL, init(extensionContext));
     }
 
-    // this is where we shutdown Arc
     @Override
     public void afterEach(ExtensionContext extensionContext) throws Exception {
         ClassLoader oldTccl = getRootExtensionStore(extensionContext).get(KEY_OLD_TCCL, ClassLoader.class);
@@ -366,32 +377,15 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
         shutdown();
     }
 
-    private static synchronized ExtensionContext.Store getRootExtensionStore(ExtensionContext context) {
-        if (EXTENSION_NAMESPACE == null) {
-            EXTENSION_NAMESPACE = ExtensionContext.Namespace.create(ArcTestContainer.class);
-        }
+    private static ExtensionContext.Store getRootExtensionStore(ExtensionContext context) {
         return context.getRoot().getStore(EXTENSION_NAMESPACE);
     }
 
-    /**
-     * In case the test is expected to fail, this method will return a {@link Throwable} that caused it.
-     */
-    public Throwable getFailure() {
-        return buildFailure.get();
+    private record BeanArchiveIndexes(IndexView immutableBeanArchiveIndex, IndexView applicationIndex,
+            ExtensionsEntryPoint buildCompatibleExtensions) {
     }
 
-    private void shutdown() {
-        Arc.shutdown();
-    }
-
-    private ClassLoader init(ExtensionContext context) {
-        // retrieve test class from extension context
-        Class<?> testClass = context.getRequiredTestClass();
-
-        // Make sure Arc is down
-        Arc.shutdown();
-
-        // Build index
+    private BeanArchiveIndexes buildBeanArchiveIndexes() {
         IndexView immutableBeanArchiveIndex;
         try {
             immutableBeanArchiveIndex = BeanArchives.buildImmutableBeanArchiveIndex(index(beanClasses));
@@ -412,34 +406,50 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
 
         ExtensionsEntryPoint buildCompatibleExtensions = new ExtensionsEntryPoint(this.buildCompatibleExtensions);
 
-        {
-            IndexView overallIndex = applicationIndex != null
-                    ? CompositeIndex.create(immutableBeanArchiveIndex, applicationIndex)
-                    : immutableBeanArchiveIndex;
-            Set<String> additionalClasses = new HashSet<>();
-            buildCompatibleExtensions.runDiscovery(overallIndex, additionalClasses);
-            Index additionalIndex = null;
-            try {
-                Set<Class<?>> additionalClassObjects = new HashSet<>();
-                for (String additionalClass : additionalClasses) {
-                    additionalClassObjects.add(ArcTestContainer.class.getClassLoader().loadClass(additionalClass));
-                }
-                additionalIndex = index(additionalClassObjects);
-            } catch (IOException | ClassNotFoundException e) {
-                throw new IllegalStateException("Failed to create index", e);
+        IndexView overallIndex = applicationIndex != null
+                ? CompositeIndex.create(immutableBeanArchiveIndex, applicationIndex)
+                : immutableBeanArchiveIndex;
+        Set<String> additionalClasses = new HashSet<>();
+        buildCompatibleExtensions.runDiscovery(overallIndex, additionalClasses);
+        Index additionalIndex = null;
+        try {
+            Set<Class<?>> additionalClassObjects = new HashSet<>();
+            for (String additionalClass : additionalClasses) {
+                additionalClassObjects.add(ArcTestContainer.class.getClassLoader().loadClass(additionalClass));
             }
-            immutableBeanArchiveIndex = CompositeIndex.create(immutableBeanArchiveIndex, additionalIndex);
+            additionalIndex = index(additionalClassObjects);
+        } catch (IOException | ClassNotFoundException e) {
+            throw new IllegalStateException("Failed to create index", e);
         }
+        immutableBeanArchiveIndex = CompositeIndex.create(immutableBeanArchiveIndex, additionalIndex);
+
+        return new BeanArchiveIndexes(immutableBeanArchiveIndex, applicationIndex, buildCompatibleExtensions);
+    }
+
+    /**
+     * In case the test is expected to fail, this method will return a {@link Throwable} that caused it.
+     */
+    public Throwable getFailure() {
+        return buildFailure.get();
+    }
+
+    private void shutdown() {
+        Arc.shutdown();
+    }
+
+    private ClassLoader init(ExtensionContext context) {
+        // retrieve test class from extension context
+        Class<?> testClass = context.getRequiredTestClass();
+
+        // Make sure Arc is down
+        Arc.shutdown();
+
+        BeanArchiveIndexes indexes = buildBeanArchiveIndexes();
+        IndexView immutableBeanArchiveIndex = indexes.immutableBeanArchiveIndex;
+        IndexView applicationIndex = indexes.applicationIndex;
+        ExtensionsEntryPoint buildCompatibleExtensions = indexes.buildCompatibleExtensions;
 
         ClassLoader old = Thread.currentThread().getContextClassLoader();
-
-        // Reproducibility check: run BeanProcessor N times and compare generated bytecode
-        if (reproducibilityRuns > 0) {
-            if (shouldFail) {
-                throw new TestAbortedException("Reproducibility check skipped: test is expected to fail.");
-            }
-            runReproducibilityCheck(testClass, immutableBeanArchiveIndex, applicationIndex, reproducibilityRuns);
-        }
 
         try {
             String arcContainerAbsolutePath = ArcTestContainer.class.getClassLoader()
@@ -530,8 +540,8 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
         return old;
     }
 
-    private void runReproducibilityCheck(Class<?> testClass, IndexView immutableBeanArchiveIndex,
-            IndexView applicationIndex, int runs) {
+    private void runReproducibilityCheck(Class<?> testClass,
+            IndexView immutableBeanArchiveIndex, IndexView applicationIndex, int runs) {
         String testName = testClass.getSimpleName();
         System.out.printf("[ArcTestContainer] Reproducibility check (%d runs) for %s%n", runs, testName);
 
