@@ -65,10 +65,12 @@ import io.quarkus.arc.processor.bcextensions.ExtensionsEntryPoint;
 public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
 
     // our specific namespace for storing anything into ExtensionContext.Store
-    private static ExtensionContext.Namespace EXTENSION_NAMESPACE;
+    private static final ExtensionContext.Namespace EXTENSION_NAMESPACE = ExtensionContext.Namespace
+            .create(ArcTestContainer.class);
 
     // Strings used as keys in ExtensionContext.Store
     private static final String KEY_OLD_TCCL = "arcExtensionOldTccl";
+    private static final String KEY_REPRODUCIBILITY_CHECKED = "reproducibility-checked";
 
     private static final String TARGET_TEST_CLASSES = "target/test-classes";
 
@@ -366,10 +368,7 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
         shutdown();
     }
 
-    private static synchronized ExtensionContext.Store getRootExtensionStore(ExtensionContext context) {
-        if (EXTENSION_NAMESPACE == null) {
-            EXTENSION_NAMESPACE = ExtensionContext.Namespace.create(ArcTestContainer.class);
-        }
+    private static ExtensionContext.Store getRootExtensionStore(ExtensionContext context) {
         return context.getRoot().getStore(EXTENSION_NAMESPACE);
     }
 
@@ -438,7 +437,7 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
             if (shouldFail) {
                 throw new TestAbortedException("Reproducibility check skipped: test is expected to fail.");
             }
-            runReproducibilityCheck(testClass, immutableBeanArchiveIndex, applicationIndex, reproducibilityRuns);
+            runReproducibilityCheck(context, testClass, immutableBeanArchiveIndex, applicationIndex, reproducibilityRuns);
         }
 
         try {
@@ -530,8 +529,14 @@ public class ArcTestContainer implements BeforeEachCallback, AfterEachCallback {
         return old;
     }
 
-    private void runReproducibilityCheck(Class<?> testClass, IndexView immutableBeanArchiveIndex,
-            IndexView applicationIndex, int runs) {
+    private void runReproducibilityCheck(ExtensionContext context, Class<?> testClass,
+            IndexView immutableBeanArchiveIndex, IndexView applicationIndex, int runs) {
+        ExtensionContext classContext = context.getParent().orElseThrow();
+        ExtensionContext.Store classStore = classContext.getStore(EXTENSION_NAMESPACE);
+        if (classStore.get(KEY_REPRODUCIBILITY_CHECKED) != null) {
+            throw new TestAbortedException("Reproducibility check already passed for " + testClass.getSimpleName());
+        }
+        classStore.put(KEY_REPRODUCIBILITY_CHECKED, true);
         String testName = testClass.getSimpleName();
         System.out.printf("[ArcTestContainer] Reproducibility check (%d runs) for %s%n", runs, testName);
 
